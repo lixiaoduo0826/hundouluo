@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>魂斗罗 - 第一关</title>
+<style>
+  html,body{margin:0;padding:0;background:#0a0a12;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  #wrap{position:relative;}
+  canvas{display:block;image-rendering:pixelated;box-shadow:0 0 40px rgba(0,180,255,.25);border-radius:4px;}
+  #tip{color:#5a7a9a;font:12px/1.6 monospace;text-align:center;margin-top:8px;user-select:none;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="tip">← → / A D 移动 &nbsp;|&nbsp; ↑ / W / 空格 跳跃 &nbsp;|&nbsp; J / X 开火（按住↑向上射击） &nbsp;|&nbsp; Enter 开始</div>
+</div>
+<script>
+"use strict";
+// ============================================================
+//  魂斗罗 · 第一关（网页版 Demo）
+// ============================================================
+const W = 960, H = 540;
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d");
+
+// ---------- 自适应缩放 ----------
+function fit(){
+  const s = Math.min(window.innerWidth / W, (window.innerHeight - 40) / H, 1.2);
+  cvs.style.width  = (W * s) + "px";
+  cvs.style.height = (H * s) + "px";
+}
+window.addEventListener("resize", fit); fit();
+
+// ---------- 音效（WebAudio 简易合成） ----------
+let AC = null;
+function ac(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return AC; }
+function sfx(freq, dur, type="square", vol=0.08, slide=0){
+  const a = ac(); if(!a) return;
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type; o.frequency.value = freq;
+  if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,freq+slide), a.currentTime+dur);
+  g.gain.setValueAtTime(vol, a.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, a.currentTime+dur);
+  o.connect(g).connect(a.destination);
+  o.start(); o.stop(a.currentTime+dur);
+}
+const S = {
+  shoot : () => sfx(880, .07, "square", .05, -500),
+  jump  : () => sfx(300, .15, "square", .06, 300),
+  hitE  : () => sfx(200, .12, "sawtooth", .07, -120),
+  hurt  : () => sfx(150, .3,  "sawtooth", .1, -100),
+  power : () => { sfx(660,.1,"square",.07); setTimeout(()=>sfx(880,.1,"square",.07),100); setTimeout(()=>sfx(1100,.15,"square",.07),200); },
+  bossDown: () => { for(let i=0;i<6;i++) setTimeout(()=>sfx(200+i*80,.15,"sawtooth",.09),i*120); },
+  clear : () => { [523,659,784,1046].forEach((f,i)=>setTimeout(()=>sfx(f,.25,"square",.08),i*180)); },
+};
+
+// ---------- 输入 ----------
+const keys = {};
+window.addEventListener("keydown", e => {
+  keys[e.code] = true;
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
+  if(e.code === "Enter") gameState.onEnter();
+  ac(); // 首次按键激活音频
+});
+window.addEventListener("keyup", e => keys[e.code] = false);
+const kLeft  = () => keys["ArrowLeft"]  || keys["KeyA"];
+const kRight = () => keys["ArrowRight"] || keys["KeyD"];
+const kUp    = () => keys["ArrowUp"]    || keys["KeyW"];
+const kJump  = () => keys["Space"]      || keys["ArrowUp"] === undefined ? keys["Space"] : keys["Space"]; // 只用空格+↓不跳
+const kShoot = () => keys["KeyJ"]       || keys["KeyX"];
+const kJumpDown = () => keys["Space"];
+
+// ---------- 关卡数据 ----------
+const GROUND_Y = 460;                 // 地面顶部
+const LEVEL_W = 5400;                 // 关卡总长
+// 地面分段（空隙 = 水坑，掉下去损命）
+const grounds = [
+  {x0:-100, x1:1250},
+  {x0:1380, x1:2450},
+  {x0:2600, x1:3650},
+  {x0:3800, x1:LEVEL_W+200},
+];
+// 悬空平台
+const platforms = [
+  {x:420,  y:360, w:180, h:16},
+  {x:760,  y:300, w:150, h:16},
+  {x:1180, y:350, w:170, h:16},
+  {x:1500, y:290, w:160, h:16},
+  {x:1900, y:360, w:200, h:16},
+  {x:2300, y:300, w:150, h:16},
+  {x:2750, y:350, w:180, h:16},
+  {x:3100, y:290, w:170, h:16},
+  {x:3450, y:360, w:180, h:16},
+  {x:3950, y:310, w:170, h:16},
+  {x:4350, y:370, w:200, h:16},
+];
+// 检查点（复活位置）
+const checkpoints = [0, 1450, 2650, 3850];
+// 敌人触发点：相机到达 x 时生成
+const triggers = [
+  {x:300,  type:"sniper", px:800,  py:GROUND_Y-40},
+  {x:700,  type:"runner"},
+  {x:1000, type:"sniper", px:1350, py:250},
+  {x:1400, type:"runner"},
+  {x:1750, type:"turret", px:1990, py:335},
+  {x:2100, type:"runner"},
+  {x:2350, type:"sniper", px:2450, py:GROUND_Y-40},
+  {x:2700, type:"runner"},
+  {x:2950, type:"turret", px:3260, py:265},
+  {x:3200, type:"runner"},
+  {x:3500, type:"sniper", px:3550, py:GROUND_Y-40},
+  {x:3850, type:"runner"},
+  {x:4100, type:"turret", px:4530, py:345},
+  {x:4400, type:"runner"},
+  {x:4600, type:"sniper", px:4700, py:GROUND_Y-40},
+];
+// 散弹枪道具（S 火种）
+const powerup = { x:2620, y:220, w:30, h:24, taken:false, bob:0 };
+
+// ---------- 实体 ----------
+let player, bullets, ebullets, enemies, particles, cam, boss;
+let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
+let autoSpawnT = 0;
+
+function resetPlayer(x){
+  player = {
+    x:x, y:GROUND_Y-38, w:22, h:38, vx:0, vy:0,
+    face:1, onGround:true, hp:1, inv:120, // 2秒无敌
+    fireCd:0, spread:false, animT:0, dead:false,
+  };
+}
+
+function startGame(){
+  bullets=[]; ebullets=[]; enemies=[]; particles=[];
+  cam=0; lives=3; score=0; killCount=0;
+  checkpoint=0; usedTriggers=new Set(); autoSpawnT=0;
+  boss = { x:5050, y:GROUND_Y-150, w:70, h:150, hp:30, maxHp:30, active:false, dead:false, t:0, burst:0 };
+  powerup.taken=false;
+  resetPlayer(60);
+  state="play"; stateTimer=0; shake=0;
+}
+
+// ---------- 工具 ----------
+const aabb = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+function groundTopAt(x){
+  for(const g of grounds) if(x>=g.x0 && x<=g.x1) return GROUND_Y;
+  return Infinity; // 水坑
+}
+function explode(x,y,color,n=10,spd=4){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, v=Math.random()*spd+1;
+    particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-1,life:20+Math.random()*20,color});
+  }
+}
+function onGroundSafe(p){
+  // 站立在地面或平台上
+  if(Math.abs(p.y + p.h - GROUND_Y) < 3){
+    for(const g of grounds) if(p.x+p.w*0.5>=g.x0 && p.x+p.w*0.5<=g.x1) return true;
+  }
+  return false;
+}
+
+// ---------- 更新逻辑 ----------
+function update(){
+  if(state!=="play"){ stateTimer++; if(shake>0)shake--; return; }
+  if(shake>0)shake--;
+
+  // ----- 玩家 -----
+  const p = player;
+  p.animT++;
+  if(p.inv>0) p.inv--;
+  const spd = 3.2;
+  p.vx = 0;
+  if(kLeft()) { p.vx=-spd; p.face=-1; }
+  if(kRight()){ p.vx= spd; p.face= 1; }
+  // 跳跃（允许土狼时间简化：onGround 即可）
+  if(kJumpDown() && p.onGround){ p.vy=-12.6; p.onGround=false; S.jump(); }
+  p.vy += 0.55; if(p.vy>14)p.vy=14;
+  p.x += p.vx; p.y += p.vy;
+  p.x = Math.max(0, Math.min(p.x, LEVEL_W - p.w));
+
+  // 平台碰撞（仅从上方落下）
+  let landed = false;
+  const feetPrev = p.y + p.h - p.vy;
+  if(p.vy >= 0){
+    for(const pl of platforms){
+      if(p.x+p.w>pl.x && p.x<pl.x+pl.w &&
+         feetPrev <= pl.y && p.y+p.h >= pl.y){
+        p.y = pl.y - p.h; p.vy = 0; landed = true; break;
+      }
+    }
+    if(!landed && onGroundSafe(p) && p.y+p.h >= GROUND_Y-1){
+      p.y = GROUND_Y - p.h; p.vy = 0; landed = true;
+    }
+  }
+  p.onGround = landed;
+
+  // 掉进水坑 / 掉出屏幕
+  if(p.y > H + 60){ hurtPlayer(true); }
+
+  // 射击
+  if(p.fireCd>0) p.fireCd--;
+  if(kShoot() && p.fireCd<=0){
+    p.fireCd = p.spread ? 16 : 10;
+    const bx = p.x + p.w/2, by = p.y + 12;
+    const mk = (vx,vy)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:60});
+    if(kUp()){ // 向上射
+      if(p.spread){ mk(-2.5,-10); mk(0,-10.5); mk(2.5,-10); }
+      else mk(0,-10.5);
+    } else if(p.spread){
+      mk(p.face*10,-2.2); mk(p.face*10.5,0); mk(p.face*10,2.2);
+    } else {
+      mk(p.face*10.5,0);
+    }
+    S.shoot();
+  }
+
+  // 道具
+  const pu = powerup;
+  pu.bob += 0.08;
+  if(!pu.taken && aabb(p, {x:pu.x,y:pu.y+Math.sin(pu.bob)*5,w:pu.w,h:pu.h})){
+    pu.taken = true; p.spread = true; score += 500; S.power();
+    explode(pu.x+15, pu.y+12, "#ffd34d", 14, 3);
+  }
+
+  // ----- 相机 -----
+  const targetCam = Math.max(0, Math.min(p.x - W*0.38, LEVEL_W - W));
+  cam = boss.active ? Math.min(cam+6, LEVEL_W - W) : cam + (targetCam - cam)*0.12;
+
+  // ----- 触发生成 -----
+  for(let i=0;i<triggers.length;i++){
+    const t = triggers[i];
+    if(!usedTriggers.has(i) && cam + W*0.85 > t.x){
+      usedTriggers.add(i);
+      if(t.type==="runner") spawnRunner();
+      if(t.type==="sniper") enemies.push(makeSoldier(t.px, t.py, "sniper"));
+      if(t.type==="turret") enemies.push(makeTurret(t.px, t.py));
+    }
+  }
+  // 自动补兵
+  autoSpawnT++;
+  if(autoSpawnT > 150 && enemies.filter(e=>e.kind==="soldier"&&e.mode==="runner").length < 3){
+    autoSpawnT = 0; spawnRunner();
+  }
+
+  // ----- 敌人 -----
+  for(const e of enemies){
+    if(e.kind==="turret"){
+      e.cd--;
+      const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = (p.y+p.h/2) - (e.y+e.h/2);
+      if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
+        e.cd = 130; e.burst = 3;
+      }
+      if(e.burst>0 && e.cd%20===5 && e.cd>20){ /* 借用 cd 计数 */ }
+      if(e.burst>0){
+        e.bt = (e.bt||0)+1;
+        if(e.bt%18===1){
+          const d = Math.hypot(dx,dy)||1;
+          ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:dx/d*5, vy:dy/d*5, life:160});
+          S.shoot(); e.burst--;
+        }
+      }
+    } else { // soldier
+      if(e.mode==="sniper"){
+        e.cd--;
+        if(!e.dead && e.cd<=0){
+          e.cd = 110;
+          const dx=(p.x+p.w/2)-(e.x+e.w/2), dy=(p.y+p.h/2)-(e.y+10), d=Math.hypot(dx,dy)||1;
+          ebullets.push({x:e.x+e.w/2,y:e.y+10,w:6,h:6,vx:dx/d*4.6,vy:dy/d*4.6,life:160});
+          S.shoot();
+        }
+      } else { // runner：冲向玩家
+        const dir = p.x > e.x ? 1 : -1;
+        e.vx = dir * 2.1;
+        e.x += e.vx;
+        e.vy += 0.55; e.y += e.vy;
+        // 落到平台/地面
+        if(e.vy>=0){
+          let ok=false;
+          for(const pl of platforms){
+            if(e.x+e.w>pl.x && e.x<pl.x+pl.w && e.y+e.h-e.vy<=pl.y && e.y+e.h>=pl.y){ e.y=pl.y-e.h; e.vy=0; ok=true; break; }
+          }
+          if(!ok && e.y+e.h>=GROUND_Y && onGroundSafe(e)){ e.y=GROUND_Y-e.h; e.vy=0; }
+        }
+        // 偶尔跳过水坑边缘
+        if(e.onGroundPrev && e.vy===0 && groundTopAt(e.x+e.w/2+e.vx*20)===Infinity && Math.random()<0.5){
+          e.vy=-10; 
+        }
+        e.onGroundPrev = (e.vy===0);
+      }
+    }
+    // 敌人撞到玩家
+    if(!e.dead && !p.dead && p.inv<=0 && aabb(p,e)) hurtPlayer();
+  }
+  enemies = enemies.filter(e => e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
+
+  // ----- Boss -----
+  const b = boss;
+  if(!b.dead){
+    if(!b.active && p.x > 4650){ b.active = true; }
+    if(b.active){
+      b.t++;
+      cam = Math.min(cam+6, LEVEL_W - W);
+      if(b.t % 110 === 0) spawnRunner(true); // Boss 召唤小兵
+      if(b.t % 160 === 20){
+        const dx=(p.x+p.w/2)-(b.x+b.w/2), dy=(p.y+p.h/2)-(b.y+40), d=Math.hypot(dx,dy)||1;
+        for(let k=-1;k<=1;k++){
+          const ang = Math.atan2(dy,dx) + k*0.25;
+          ebullets.push({x:b.x, y:b.y+40, w:8, h:8, vx:Math.cos(ang)*5.5, vy:Math.sin(ang)*5.5, life:200});
+        }
+        S.shoot();
+      }
+      if(aabb(p,b) && p.inv<=0) hurtPlayer();
+    }
+  }
+
+  // ----- 子弹 -----
+  for(const bl of bullets){
+    bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
+    // 打敌人
+    for(const e of enemies){
+      if(!e.dead && aabb(bl,e)){
+        bl.life=0; e.hp--; explode(bl.x,bl.y,"#fff3a0",5,2.5);
+        if(e.hp<=0){
+          e.dead=true; killCount++;
+          score += (e.kind==="turret")?500:(e.mode==="sniper"?200:100);
+          explode(e.x+e.w/2,e.y+e.h/2,"#ff9b4d",14,4); S.hitE();
+        }
+        break;
+      }
+    }
+    // 打 Boss
+    if(bl.life>0 && boss.active && !boss.dead && aabb(bl,boss)){
+      bl.life=0; boss.hp--; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
+      if(boss.hp<=0){
+        boss.dead=true; score+=5000; S.bossDown();
+        explode(boss.x+boss.w/2,boss.y+boss.h/2,"#ff5b3d",40,7); shake=30;
+        setTimeout(()=>{ state="win"; S.clear(); }, 1600);
+      }
+    }
+  }
+  bullets = bullets.filter(b=>b.life>0 && b.x>cam-40 && b.x<cam+W+40 && b.y>-40 && b.y<H+40);
+
+  for(const bl of ebullets){
+    bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
+    if(p.inv<=0 && !p.dead && aabb(bl,p)){ bl.life=0; hurtPlayer(); }
+  }
+  ebullets = ebullets.filter(b=>b.life>0);
+
+  // 粒子
+  for(const q of particles){ q.x+=q.vx; q.y+=q.vy; q.vy+=0.25; q.life--; }
+  particles = particles.filter(q=>q.life>0);
+}
+
+function spawnRunner(fromBoss){
+  const fromRight = !fromBoss ? true : (Math.random()<0.6);
+  const x = fromRight ? cam+W+30 : cam-30;
+  enemies.push(makeSoldier(x, GROUND_Y-40, "runner"));
+}
+function makeSoldier(x,y,mode){ return {kind:"soldier",mode,x,y,w:24,h:40,vx:0,vy:0,hp:1,dead:false,cd:60+Math.random()*80,onGroundPrev:false,animT:Math.random()*100}; }
+function makeTurret(x,y){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0}; }
+
+function hurtPlayer(fell){
+  const p = player;
+  if(!fell && p.inv>0) return;
+  lives--; S.hurt(); shake=12;
+  explode(p.x+p.w/2, p.y+p.h/2, "#ff5b3d", 18, 5);
+  if(lives < 0){ state = "over"; stateTimer=0; return; }
+  // 找最近的检查点
+  let cp = 0;
+  for(const c of checkpoints) if(c <= p.x+50) cp = Math.max(cp,c);
+  checkpoint = cp;
+  resetPlayer(checkpoint + 20);
+  // 清掉玩家身边子弹，防止连续受伤
+  ebullets = ebullets.filter(b => Math.abs(b.x - p.x) > 150);
+}
+
+// ============================================================
+//  渲染
+// ============================================================
+function drawBG(){
+  // 天空
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,"#0b1a3a"); sky.addColorStop(.55,"#1d3f6e"); sky.addColorStop(1,"#3a6b8a");
+  ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+  // 月亮
+  ctx.fillStyle="#e8f0ff"; ctx.beginPath(); ctx.arc(W-140-cam*0.02, 90, 34, 0, 7); ctx.fill();
+  ctx.fillStyle="#1d3f6e"; ctx.beginPath(); ctx.arc(W-128-cam*0.02, 82, 28, 0, 7); ctx.fill();
+  // 远山（视差 0.25）
+  ctx.fillStyle="#16294a";
+  for(let i=-1;i<8;i++){
+    const bx = ((i*320 - cam*0.25) % 2560 + 2560) % 2560 - 200;
+    ctx.beginPath();
+    ctx.moveTo(bx, 380); ctx.lineTo(bx+160, 200+((i*53)%70)); ctx.lineTo(bx+340, 380);
+    ctx.closePath(); ctx.fill();
+  }
+  // 丛林剪影（视差 0.5）
+  ctx.fillStyle="#0f2233";
+  for(let i=-1;i<14;i++){
+    const bx = ((i*180 - cam*0.5) % 2520 + 2520) % 2520 - 200;
+    const h = 120 + ((i*97)%60);
+    ctx.beginPath();
+    ctx.moveTo(bx,430); ctx.lineTo(bx+45,430-h); ctx.lineTo(bx+90,430);
+    ctx.closePath(); ctx.fill();
+  }
+}
+function drawTerrain(){
+  // 水坑
+  ctx.fillStyle="#123a55";
+  for(let i=0;i<grounds.length-1;i++){
+    const gx = grounds[i].x1, gw = grounds[i+1].x0 - grounds[i].x1;
+    ctx.fillRect(gx-cam, GROUND_Y, gw, H-GROUND_Y);
+    ctx.fillStyle="#2a6b8f";
+    for(let wv=0; wv<gw; wv+=26){
+      ctx.fillRect(gx+wv-cam + ((perfNow/200)%26), GROUND_Y, 12, 4);
+    }
+    ctx.fillStyle="#123a55";
+  }
+  // 地面
+  for(const g of grounds){
+    const sx = Math.max(g.x0, cam-10), ex = Math.min(g.x1, cam+W+10);
+    if(ex<=sx) continue;
+    ctx.fillStyle="#2d4a2f"; ctx.fillRect(sx-cam, GROUND_Y, ex-sx, H-GROUND_Y);
+    ctx.fillStyle="#4a7a3d"; ctx.fillRect(sx-cam, GROUND_Y, ex-sx, 8);
+    // 泥土纹理
+    ctx.fillStyle="#233b24";
+    for(let tx=Math.floor(sx/40)*40; tx<ex; tx+=40){
+      ctx.fillRect(tx-cam, GROUND_Y+20+((tx*7)%3)*12, 20, 6);
+    }
+  }
+  // 平台
+  for(const pl of platforms){
+    if(pl.x+pl.w<cam || pl.x>cam+W) continue;
+    ctx.fillStyle="#5b4630"; ctx.fillRect(pl.x-cam, pl.y, pl.w, pl.h);
+    ctx.fillStyle="#7d5f3f"; ctx.fillRect(pl.x-cam, pl.y, pl.w, 5);
+    ctx.fillStyle="#3e2f1f"; ctx.fillRect(pl.x-cam, pl.y+pl.h-4, pl.w, 4);
+  }
+}
+function drawPlayer(){
+  const p = player;
+  if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return; // 受伤闪烁
+  const x = p.x-cam, y = p.y;
+  const run = p.onGround && Math.abs(p.vx)>0.1;
+  const bob = run ? Math.sin(p.animT*0.4)*2 : 0;
+  ctx.save(); ctx.translate(x+p.w/2, y+bob); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
+  // 腿
+  ctx.fillStyle="#2857a8";
+  if(run){
+    const lo = Math.sin(p.animT*0.4)*6;
+    ctx.fillRect(2,26,7,12+lo*0.5); ctx.fillRect(12,26,7,12-lo*0.5);
+  } else { ctx.fillRect(2,26,7,12); ctx.fillRect(12,26,7,12); }
+  // 躯干（裸上身 + 弹带，向经典致敬）
+  ctx.fillStyle="#e8a878"; ctx.fillRect(3,14,16,13);
+  ctx.fillStyle="#7a4a28"; ctx.fillRect(3,18,16,3);
+  // 头 + 红头巾
+  ctx.fillStyle="#e8a878"; ctx.fillRect(5,3,12,11);
+  ctx.fillStyle="#d42a2a"; ctx.fillRect(4,1,14,5);
+  ctx.fillRect(16,3,7,3);
+  // 枪
+  ctx.fillStyle="#444";
+  const aimUp = kUp();
+  if(aimUp) ctx.fillRect(9,-8,4,18);
+  else ctx.fillRect(14,17,12,4);
+  ctx.restore();
+}
+function drawSoldier(e){
+  const x=e.x-cam, y=e.y, t=(e.animT+=0.3);
+  if(e.kind==="turret"){
+    ctx.fillStyle="#3a3f4a"; ctx.fillRect(x, y+14, e.w, e.h-14);
+    ctx.fillStyle="#565e6e"; ctx.fillRect(x+4, y+18, e.w-8, 8);
+    ctx.fillStyle="#22262e"; ctx.fillRect(x+e.w/2-4, y, 8, 16);
+    ctx.fillStyle="#88332a"; ctx.beginPath(); ctx.arc(x+e.w/2, y, 7, 0, 7); ctx.fill();
+    if(!e.dead){ ctx.fillStyle = (Math.floor(t/15)%2)?"#ff5b3d":"#802a1a"; ctx.fillRect(x+e.w/2-2, y-2, 4, 4); }
+    return;
+  }
+  // 士兵
+  const run = e.mode==="runner";
+  const bob = run?Math.sin(t*0.5)*1.5:0;
+  ctx.save(); ctx.translate(x+e.w/2, y+bob);
+  const dir = (player.x > e.x)?1:-1; ctx.scale(dir,1); ctx.translate(-e.w/2,0);
+  ctx.fillStyle="#5a6a3a"; // 军绿
+  if(run){ const lo=Math.sin(t*0.5)*5; ctx.fillRect(3,26,7,14+lo*0.4); ctx.fillRect(13,26,7,14-lo*0.4); }
+  else { ctx.fillRect(3,26,7,14); ctx.fillRect(13,26,7,14); }
+  ctx.fillRect(2,12,19,14);
+  ctx.fillStyle="#c9a17a"; ctx.fillRect(6,3,11,9);
+  ctx.fillStyle="#3d4a26"; ctx.fillRect(4,0,15,4); // 头盔
+  ctx.fillStyle="#333"; ctx.fillRect(15,14,12,4);  // 枪
+  ctx.restore();
+}
+function drawBoss(){
+  const b = boss, x=b.x-cam, y=b.y;
+  if(x>W+100) return;
+  // 要塞墙
+  ctx.fillStyle="#4a4440";
+  ctx.fillRect(x+40, 0, LEVEL_W - b.x + 300, GROUND_Y);
+  ctx.fillStyle="#3a3531";
+  for(let wy=0; wy<GROUND_Y; wy+=40) ctx.fillRect(x+40, wy, LEVEL_W-b.x+300, 3);
+  // 大门（Boss 本体）
+  ctx.fillStyle = b.dead ? "#333" : "#6b2f2a";
+  ctx.fillRect(x, y, b.w, b.h);
+  ctx.fillStyle = b.dead ? "#222" : "#8a4038";
+  ctx.fillRect(x+8, y+8, b.w-16, b.h-16);
+  // 炮口
+  if(!b.dead){
+    ctx.fillStyle="#1a1a1a"; ctx.beginPath(); ctx.arc(x+b.w/2, y+40, 12, 0, 7); ctx.fill();
+    ctx.fillStyle = (b.t%40<20)?"#ff5b3d":"#5a1a10"; ctx.beginPath(); ctx.arc(x+b.w/2, y+40, 5, 0, 7); ctx.fill();
+    // 血条
+    ctx.fillStyle="#000a"; ctx.fillRect(W/2-160, 24, 320, 16);
+    ctx.fillStyle="#ff5b3d"; ctx.fillRect(W/2-158, 26, 316*b.hp/b.maxHp, 12);
+    ctx.fillStyle="#fff"; ctx.font="12px monospace"; ctx.fillText("要塞之门", W/2-30, 56);
+  } else {
+    if(Math.random()<0.15) explode(b.x+Math.random()*b.w, b.y+Math.random()*b.h, "#ff9b4d", 4, 3);
+  }
+}
+function drawBullets(){
+  ctx.fillStyle="#ffe86b";
+  for(const b of bullets){ ctx.fillRect(b.x-cam-3, b.y-3, 6, 6); }
+  ctx.fillStyle="#ff7b5b";
+  for(const b of ebullets){
+    ctx.beginPath(); ctx.arc(b.x-cam, b.y, 4.5, 0, 7); ctx.fill();
+  }
+}
+function drawParticles(){
+  for(const q of particles){
+    ctx.globalAlpha = Math.min(1, q.life/20);
+    ctx.fillStyle = q.color;
+    ctx.fillRect(q.x-cam-2, q.y-2, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawPowerup(){
+  if(powerup.taken) return;
+  const x=powerup.x-cam, y=powerup.y+Math.sin(powerup.bob)*5;
+  ctx.fillStyle="#c0c8d8"; ctx.fillRect(x,y,powerup.w,powerup.h);
+  ctx.fillStyle="#d42a2a"; ctx.fillRect(x+2,y+2,powerup.w-4,powerup.h-4);
+  ctx.fillStyle="#fff"; ctx.font="bold 16px monospace"; ctx.fillText("S", x+10, y+18);
+}
+function drawHUD(){
+  ctx.fillStyle="#fff"; ctx.font="bold 16px monospace";
+  ctx.fillText("分数 " + score, 20, 32);
+  // 生命（小人图标）
+  for(let i=0;i<Math.max(0,lives);i++){
+    ctx.fillStyle="#e8a878"; ctx.fillRect(20+i*24, 46, 10, 12);
+    ctx.fillStyle="#d42a2a"; ctx.fillRect(20+i*24, 44, 10, 4);
+  }
+  if(player.spread){ ctx.fillStyle="#ffd34d"; ctx.fillText("S 散弹枪", 20, 84); }
+  // 进度条
+  ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
+  ctx.fillStyle="#4da6ff"; ctx.fillRect(W/2-150, H-24, 300*Math.min(1,cam/(LEVEL_W-W)), 8);
+}
+function drawOverlay(title, sub, color){
+  ctx.fillStyle="#000c"; ctx.fillRect(0,0,W,H);
+  ctx.textAlign="center";
+  ctx.fillStyle=color; ctx.font="bold 52px monospace";
+  ctx.fillText(title, W/2, H/2-40);
+  ctx.fillStyle="#cfd8e3"; ctx.font="18px monospace";
+  ctx.fillText(sub, W/2, H/2+10);
+  if(Math.floor(perfNow/500)%2===0){
+    ctx.fillStyle="#ffd34d"; ctx.font="16px monospace";
+    ctx.fillText("- 按 Enter " + (state==="title"?"开始游戏":"重新开始") + " -", W/2, H/2+70);
+  }
+  ctx.textAlign="left";
+}
+
+let perfNow = 0;
+function render(){
+  ctx.save();
+  if(shake>0) ctx.translate((Math.random()-0.5)*shake*0.6, (Math.random()-0.5)*shake*0.6);
+  drawBG();
+  if(state==="title"){
+    ctx.restore();
+    drawOverlay("魂斗罗", "第一关 · 丛林突击", "#4da6ff");
+    return;
+  }
+  drawTerrain();
+  drawPowerup();
+  for(const e of enemies) drawSoldier(e);
+  drawBoss();
+  drawPlayer();
+  drawBullets();
+  drawParticles();
+  ctx.restore();
+  drawHUD();
+  if(state==="over") drawOverlay("游戏结束", "击杀 " + killCount + " · 得分 " + score, "#ff5b3d");
+  if(state==="win")  drawOverlay("第一关 突破！", "得分 " + score + " · 感谢测试", "#4dff88");
+}
+
+// ---------- 游戏状态 ----------
+const gameState = {
+  onEnter(){
+    if(state==="title" || state==="over" || state==="win") startGame();
+  }
+};
+
+// ---------- 主循环 ----------
+state = "title";
+let last = 0;
+function loop(t){
+  perfNow = t;
+  const dt = Math.min(50, t - last); last = t;
+  // 固定步长近似（60fps 基准）
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

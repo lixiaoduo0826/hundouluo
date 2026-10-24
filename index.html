@@ -154,10 +154,10 @@ function explode(x,y,color,n=10,spd=4){
     particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-1,life:20+Math.random()*20,color});
   }
 }
-function onGroundSafe(p){
-  // 站立在地面或平台上
-  if(Math.abs(p.y + p.h - GROUND_Y) < 3){
-    for(const g of grounds) if(p.x+p.w*0.5>=g.x0 && p.x+p.w*0.5<=g.x1) return true;
+function footOnGround(footL, footR){
+  // 脚部区间与任意地面分段有重叠即视为站在地面上
+  for(const g of grounds){
+    if(footR >= g.x0 && footL <= g.x1) return true;
   }
   return false;
 }
@@ -181,17 +181,19 @@ function update(){
   p.x += p.vx; p.y += p.vy;
   p.x = Math.max(0, Math.min(p.x, LEVEL_W - p.w));
 
-  // 平台碰撞（仅从上方落下）
+  // 平台 / 地面碰撞（扫掠式：上一帧脚在其上方、这一帧越过其顶面即落地）
   let landed = false;
   const feetPrev = p.y + p.h - p.vy;
+  // 脚部碰撞区间：脚的任何一部分踩到支撑面都算站立（放宽接触判定）
+  const footL = p.x + 2, footR = p.x + p.w - 2;
   if(p.vy >= 0){
     for(const pl of platforms){
-      if(p.x+p.w>pl.x && p.x<pl.x+pl.w &&
-         feetPrev <= pl.y && p.y+p.h >= pl.y){
+      if(footR > pl.x && footL < pl.x + pl.w &&
+         feetPrev <= pl.y + 2 && p.y + p.h >= pl.y){
         p.y = pl.y - p.h; p.vy = 0; landed = true; break;
       }
     }
-    if(!landed && onGroundSafe(p) && p.y+p.h >= GROUND_Y-1){
+    if(!landed && feetPrev <= GROUND_Y + 2 && p.y + p.h >= GROUND_Y && footOnGround(footL, footR)){
       p.y = GROUND_Y - p.h; p.vy = 0; landed = true;
     }
   }
@@ -275,26 +277,34 @@ function update(){
         const dir = p.x > e.x ? 1 : -1;
         e.vx = dir * 2.1;
         e.x += e.vx;
-        e.vy += 0.55; e.y += e.vy;
-        // 落到平台/地面
-        if(e.vy>=0){
-          let ok=false;
+        const feetPrevE = e.y + e.h;
+        e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
+        // 扫掠式落地：平台或地面，脚部任一部分接触即站立
+        if(e.vy >= 0){
+          const footL = e.x + 2, footR = e.x + e.w - 2;
+          let ok = false;
           for(const pl of platforms){
-            if(e.x+e.w>pl.x && e.x<pl.x+pl.w && e.y+e.h-e.vy<=pl.y && e.y+e.h>=pl.y){ e.y=pl.y-e.h; e.vy=0; ok=true; break; }
+            if(footR > pl.x && footL < pl.x + pl.w &&
+               feetPrevE <= pl.y + 2 && e.y + e.h >= pl.y){
+              e.y = pl.y - e.h; e.vy = 0; ok = true; break;
+            }
           }
-          if(!ok && e.y+e.h>=GROUND_Y && onGroundSafe(e)){ e.y=GROUND_Y-e.h; e.vy=0; }
+          if(!ok && feetPrevE <= GROUND_Y + 2 && e.y + e.h >= GROUND_Y && footOnGround(footL, footR)){
+            e.y = GROUND_Y - e.h; e.vy = 0; ok = true;
+          }
+          e.onGroundPrev = ok;
+          // 站在地面边缘前方是水坑时，起跳跨过去
+          if(ok && groundTopAt(e.x + e.w/2 + e.vx*22) === Infinity && Math.random() < 0.5){
+            e.vy = -10; e.onGroundPrev = false;
+          }
         }
-        // 偶尔跳过水坑边缘
-        if(e.onGroundPrev && e.vy===0 && groundTopAt(e.x+e.w/2+e.vx*20)===Infinity && Math.random()<0.5){
-          e.vy=-10; 
-        }
-        e.onGroundPrev = (e.vy===0);
       }
     }
     // 敌人撞到玩家
     if(!e.dead && !p.dead && p.inv<=0 && aabb(p,e)) hurtPlayer();
   }
-  enemies = enemies.filter(e => e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
+  // 死亡的敌人立即移除；出界/坠落的也移除
+  enemies = enemies.filter(e => !e.dead && e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
 
   // ----- Boss -----
   const b = boss;

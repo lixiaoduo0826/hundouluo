@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; ↑ 跳跃 &nbsp;|&nbsp; ↓ 蹲下（可躲子弹） &nbsp;|&nbsp; 数字 1 开火 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 数字 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下（可躲子弹） &nbsp;|&nbsp; 数字 1 开火 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -70,7 +70,7 @@ const kRight = () => keys["ArrowRight"];
 const kUp    = () => keys["ArrowUp"];    // 跳跃
 const kDown  = () => keys["ArrowDown"];  // 蹲下
 const kShoot = () => keys["Digit1"] || keys["Numpad1"];
-const kJumpDown = () => keys["Space"] || keys["ArrowUp"];
+const kJumpDown = () => keys["Digit2"] || keys["Numpad2"];
 
 // ---------- 关卡数据 ----------
 const GROUND_Y = 460;                 // 地面顶部

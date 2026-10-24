@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 数字 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下（可躲子弹） &nbsp;|&nbsp; 数字 1 开火 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 数字 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 数字 1 开火（按住 ↑ + 1 朝上射击） &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -104,7 +104,7 @@ const triggers = [
   {x:700,  type:"runner"},
   {x:1000, type:"sniper", px:1430, py:GROUND_Y-40},
   {x:1400, type:"runner"},
-  {x:1750, type:"turret", px:2040, py:320},
+  {x:1750, type:"turret", px:2040, py:320, sp:true},
   {x:2100, type:"runner"},
   {x:2350, type:"sniper", px:2650, py:GROUND_Y-40},
   {x:2700, type:"runner"},
@@ -112,7 +112,7 @@ const triggers = [
   {x:3200, type:"runner"},
   {x:3500, type:"sniper", px:3550, py:GROUND_Y-40},
   {x:3850, type:"runner"},
-  {x:4100, type:"turret", px:4500, py:330},
+  {x:4100, type:"turret", px:4500, py:330, sp:true},
   {x:4400, type:"runner"},
   {x:4600, type:"sniper", px:4700, py:GROUND_Y-40},
 ];
@@ -227,7 +227,10 @@ function update(){
     p.fireCd = p.spread ? 16 : 10;
     const bx = p.x + p.w/2, by = p.crouch ? p.y + 28 : p.y + 12;
     const mk = (vx,vy)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:60});
-    if(p.spread){
+    if(kUp()){ // 按住 ↑ 开火：朝上喷子弹
+      if(p.spread){ mk(-2.5,-10); mk(0,-10.5); mk(2.5,-10); }
+      else mk(0,-10.5);
+    } else if(p.spread){
       mk(p.face*10,-2.2); mk(p.face*10.5,0); mk(p.face*10,2.2);
     } else {
       mk(p.face*10.5,0);
@@ -254,7 +257,7 @@ function update(){
       usedTriggers.add(i);
       if(t.type==="runner") spawnRunner();
       if(t.type==="sniper") enemies.push(makeSoldier(t.px, t.py, "sniper"));
-      if(t.type==="turret") enemies.push(makeTurret(t.px, t.py));
+      if(t.type==="turret") enemies.push(makeTurret(t.px, t.py, t.sp));
     }
   }
   // 自动补兵
@@ -267,21 +270,30 @@ function update(){
   for(const e of enemies){
     if(e.kind==="turret"){
       e.cd--;
-      const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = (p.y+p.h/2) - (e.y+e.h/2);
-      if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
-        e.cd = 130; e.burst = 3;
-      }
-      if(e.burst>0){
-        e.bt = (e.bt||0)+1;
-        if(e.bt%18===1){
-          // 三向扇形散射：以玩家为中心 ±22°，覆盖更多朝向
-          const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = chestY() - (e.y+8);
-          const base = Math.atan2(dy,dx);
-          for(let k=-1;k<=1;k++){
-            const ang = base + k*0.38;
-            ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:Math.cos(ang)*4.8, vy:Math.sin(ang)*4.8, life:160});
+      const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = chestY() - (e.y+8);
+      if(e.sp){
+        // 特殊炮台：单发瞄准、节奏慢、无散射
+        if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
+          e.cd = 170;
+          const d = Math.hypot(dx,dy)||1;
+          ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:dx/d*4.2, vy:dy/d*4.2, life:160});
+          S.shoot();
+        }
+      } else {
+        if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
+          e.cd = 130; e.burst = 3;
+        }
+        if(e.burst>0){
+          e.bt = (e.bt||0)+1;
+          if(e.bt%18===1){
+            // 三向扇形散射：以玩家为中心 ±22°，覆盖更多朝向
+            const base = Math.atan2(dy,dx);
+            for(let k=-1;k<=1;k++){
+              const ang = base + k*0.38;
+              ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:Math.cos(ang)*4.8, vy:Math.sin(ang)*4.8, life:160});
+            }
+            S.shoot(); e.burst--;
           }
-          S.shoot(); e.burst--;
         }
       }
     } else { // soldier
@@ -428,7 +440,7 @@ function spawnRunner(fromBoss){
   enemies.push(makeSoldier(x, GROUND_Y-40, "runner"));
 }
 function makeSoldier(x,y,mode){ return {kind:"soldier",mode,x,y,w:24,h:40,vx:0,vy:0,hp:1,dead:false,cd:60+Math.random()*80,onGroundPrev:false,animT:Math.random()*100}; }
-function makeTurret(x,y){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0}; }
+function makeTurret(x,y,sp){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0,sp:!!sp}; }
 
 function hurtPlayer(fell){
   const p = player;
@@ -549,11 +561,16 @@ function drawPlayerCrouch(){
 function drawSoldier(e){
   const x=e.x-cam, y=e.y, t=(e.animT+=0.3);
   if(e.kind==="turret"){
-    ctx.fillStyle="#3a3f4a"; ctx.fillRect(x, y+14, e.w, e.h-14);
-    ctx.fillStyle="#565e6e"; ctx.fillRect(x+4, y+18, e.w-8, 8);
+    // 特殊炮台（青色，温和版）与普通炮台（灰红，扇形散射）
+    ctx.fillStyle = e.sp ? "#1f6f6f" : "#3a3f4a"; ctx.fillRect(x, y+14, e.w, e.h-14);
+    ctx.fillStyle = e.sp ? "#3aa8a0" : "#565e6e"; ctx.fillRect(x+4, y+18, e.w-8, 8);
     ctx.fillStyle="#22262e"; ctx.fillRect(x+e.w/2-4, y, 8, 16);
-    ctx.fillStyle="#88332a"; ctx.beginPath(); ctx.arc(x+e.w/2, y, 7, 0, 7); ctx.fill();
-    if(!e.dead){ ctx.fillStyle = (Math.floor(t/15)%2)?"#ff5b3d":"#802a1a"; ctx.fillRect(x+e.w/2-2, y-2, 4, 4); }
+    ctx.fillStyle = e.sp ? "#1a5a56" : "#88332a"; ctx.beginPath(); ctx.arc(x+e.w/2, y, 7, 0, 7); ctx.fill();
+    if(!e.dead){
+      const blink = Math.floor(t/15)%2===0;
+      ctx.fillStyle = e.sp ? (blink?"#5afff0":"#1a8a80") : (blink?"#ff5b3d":"#802a1a");
+      ctx.fillRect(x+e.w/2-2, y-2, 4, 4);
+    }
     return;
   }
   // 士兵

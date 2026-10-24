@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; ↑ 瞄上 / ↑+方向 斜上瞄准 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; ↑ 瞄上(锁定1.5秒) / ↑+方向 斜上 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -60,6 +60,8 @@ const S = {
 const keys = {};
 window.addEventListener("keydown", e => {
   keys[e.code] = true;
+  // 瞄准锁定：按下 ↑ 的瞬间立即生效，极快点按也不会丢失
+  if((e.code==="ArrowUp" || e.code==="KeyW") && typeof player!=="undefined" && player) player.aimLatch = 90;
   if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
   if(e.code === "Enter") gameState.onEnter();
   ac(); // 首次按键激活音频
@@ -67,7 +69,7 @@ window.addEventListener("keydown", e => {
 window.addEventListener("keyup", e => keys[e.code] = false);
 const kLeft  = () => keys["ArrowLeft"];
 const kRight = () => keys["ArrowRight"];
-const kUp    = () => keys["ArrowUp"];    // 跳跃
+const kUp    = () => keys["ArrowUp"] || keys["KeyW"];  // 瞄准上（W 亦可）
 const kDown  = () => keys["ArrowDown"];  // 蹲下
 const kShoot = () => keys["Digit1"] || keys["Numpad1"];
 const kJumpDown = () => keys["Digit2"] || keys["Numpad2"];
@@ -140,16 +142,19 @@ const triggers = [
   {x:300,  type:"sniper", px:800,  py:GY-40},
   {x:700,  type:"runner"},
   {x:1000, type:"sniper", px:1430, py:GY-40},
+  {x:1150, type:"bomber"},
   {x:1400, type:"runner"},
   {x:1700, type:"turret", px:2040, py:320, sp:true},
   {x:2100, type:"runner"},
   {x:2350, type:"sniper", px:2650, py:GY-40},
   {x:2700, type:"runner"},
   {x:2850, type:"turret", px:3200, py:290},
+  {x:3050, type:"bomber"},
   {x:3200, type:"runner"},
   {x:3450, type:"sniper", px:3550, py:GY-40},
   {x:3800, type:"runner"},
   {x:4150, type:"turret", px:4500, py:330, sp:true},
+  {x:4250, type:"bomber"},
   {x:4400, type:"runner"},
   {x:4600, type:"sniper", px:4700, py:GY-40},
   {x:4800, type:"runner"},
@@ -161,6 +166,7 @@ const triggers = [
   {x:5900, type:"runner"},
   {x:6100, type:"runner"},
   {x:6350, type:"turret", px:6600, py:280, sp:true},
+  {x:6450, type:"bomber"},
   {x:6550, type:"runner"},
   {x:6800, type:"sniper", px:6900, py:GY-40},
   {x:7000, type:"runner"},
@@ -171,6 +177,7 @@ const triggers = [
   {x:8050, type:"turret", px:8200, py:290},
   {x:8250, type:"runner"},
   {x:8500, type:"runner"},
+  {x:8650, type:"bomber"},
   {x:8750, type:"turret", px:9000, py:280, sp:true},
   {x:8950, type:"runner"},
   {x:9150, type:"sniper", px:9300, py:GY-40},
@@ -181,6 +188,7 @@ const triggers = [
   {x:10150, type:"sniper", px:10250, py:320},
   {x:10350, type:"turret", px:10600, py:280, sp:true},
   {x:10550, type:"runner"},
+  {x:10750, type:"bomber"},
   {x:10800, type:"runner"},
   {x:10950, type:"sniper", px:11050, py:320},
   {x:11100, type:"turret", px:11400, py:290},
@@ -193,6 +201,7 @@ const triggers = [
   {x:12450, type:"runner"},
   {x:12600, type:"sniper", px:12700, py:GY-40},
   {x:12750, type:"turret", px:13000, py:290},
+  {x:12850, type:"bomber"},
   {x:12950, type:"runner"},
   {x:13200, type:"runner"},
   {x:13350, type:"sniper", px:13450, py:320},
@@ -201,6 +210,7 @@ const triggers = [
   {x:14000, type:"runner"},
   {x:14150, type:"turret", px:14600, py:290},
   {x:14350, type:"runner"},
+  {x:14450, type:"bomber"},
   {x:14600, type:"sniper", px:15050, py:GY-40},
   {x:14750, type:"runner"},
   {x:14900, type:"runner"},
@@ -217,6 +227,13 @@ const powerups = [
   {type:"L", x:13900, y:280, w:34, h:26, taken:false, bob:0},
 ];
 
+// 奖励勋章（+1 条命），第一关共 3 枚，藏在高台上
+const medals = [
+  {x:2350,  y:290, taken:false, bob:0},
+  {x:9450,  y:320, taken:false, bob:0},
+  {x:13460, y:320, taken:false, bob:0},
+];
+
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
@@ -226,7 +243,7 @@ function resetPlayer(x){
   player = {
     x:x, y:GROUND_Y-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
-    fireCd:0, weapon:"N", aimAng:0, animT:0, dead:false,
+    fireCd:0, weapon:"N", aimAng:0, aimLatch:0, animT:0, dead:false,
   };
 }
 
@@ -244,6 +261,7 @@ function startGame(){
     ],
   };
   for(const pu of powerups) pu.taken=false;
+  for(const m of medals) m.taken=false;
   resetPlayer(60);
   state="play"; stateTimer=0; shake=0;
 }
@@ -319,8 +337,11 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
-  // 瞄准方向：单按 ↑ = 正上；↑ + 左/右 = 斜上 35°（跟随移动方向）
-  const aimingUp = kUp() && !p.crouch;
+  // 瞄准方向：↑ 按住或 1.5 秒内按过（锁定），单 ↑ 正上，配合方向键斜上 35°
+  // 锁定机制可避开部分键盘"三键同按冲突"：先点一下 ↑，再按住 方向 + 1 即可斜射
+  if(kUp()) p.aimLatch = 90;
+  else if(p.aimLatch > 0) p.aimLatch--;
+  const aimingUp = p.aimLatch > 0 && !p.crouch;
   const movingH = kLeft() || kRight();
   p.aimAng = aimingUp ? (movingH ? -0.61 : -Math.PI/2) : 0;
 
@@ -365,6 +386,15 @@ function update(){
     }
   }
 
+  // 勋章拾取：+1 条命
+  for(const m of medals){
+    m.bob += 0.06;
+    if(!m.taken && aabb(p, {x:m.x, y:m.y+Math.sin(m.bob)*5, w:26, h:26})){
+      m.taken = true; lives++; score += 300; S.power();
+      explode(m.x+13, m.y+13, "#ffd34d", 18, 4);
+    }
+  }
+
   // ----- 相机 -----
   const targetCam = Math.max(0, Math.min(p.x - W*0.38, LEVEL_W - W));
   cam = boss.active ? Math.min(cam+6, LEVEL_W - W) : cam + (targetCam - cam)*0.12;
@@ -375,6 +405,7 @@ function update(){
     if(!usedTriggers.has(i) && cam + W*0.85 > t.x){
       usedTriggers.add(i);
       if(t.type==="runner") spawnRunner();
+      if(t.type==="bomber") enemies.push(makeSoldier(cam+W+40, GROUND_Y-40, "bomber"));
       if(t.type==="sniper") enemies.push(makeSoldier(t.px, t.py, "sniper"));
       if(t.type==="turret") enemies.push(makeTurret(t.px, t.py, t.sp));
     }
@@ -405,12 +436,9 @@ function update(){
         if(e.burst>0){
           e.bt = (e.bt||0)+1;
           if(e.bt%18===1){
-            // 三向扇形散射：以玩家为中心 ±22°，覆盖更多朝向
-            const base = Math.atan2(dy,dx);
-            for(let k=-1;k<=1;k++){
-              const ang = base + k*0.38;
-              ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:Math.cos(ang)*4.8, vy:Math.sin(ang)*4.8, life:160});
-            }
+            // 三连单发瞄准（无散射），一轮只打 3 发
+            const d = Math.hypot(dx,dy)||1;
+            ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:dx/d*4.8, vy:dy/d*4.8, life:160});
             S.shoot(); e.burst--;
           }
         }
@@ -437,9 +465,9 @@ function update(){
           ebullets.push({x:e.x+e.w/2,y:e.y+10,w:6,h:6,vx:dx/d*4.6,vy:dy/d*4.6,life:160});
           S.shoot();
         }
-      } else { // runner：冲向玩家
+      } else { // runner / bomber：冲向玩家
         const dir = p.x > e.x ? 1 : -1;
-        e.vx = dir * 2.1;
+        e.vx = dir * (e.mode==="bomber" ? 2.9 : 2.1);
         e.x += e.vx;
         const feetPrevE = e.y + e.h;
         e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
@@ -464,8 +492,24 @@ function update(){
         }
       }
     }
-    // 敌人撞到玩家
-    if(!e.dead && !p.dead && p.inv<=0 && aabb(hitbox(),e)) hurtPlayer();
+    // 敌人撞到玩家（自爆兵撞击即自爆）
+    if(!e.dead && !p.dead && p.inv<=0 && aabb(hitbox(),e)){
+      hurtPlayer();
+      if(e.mode==="bomber") e.dead = true;
+    }
+  }
+  // 自爆兵死亡：掉落一圈炸弹并向四周炸开
+  for(const e of enemies){
+    if(e.dead && e.mode==="bomber" && !e.bombed){
+      e.bombed = true;
+      for(let k=0;k<10;k++){
+        const a = k*Math.PI/5 + Math.random()*0.2;
+        ebullets.push({x:e.x+e.w/2, y:e.y+e.h/2, w:9, h:9, r:6,
+                       vx:Math.cos(a)*3.2, vy:Math.sin(a)*3.2, life:110});
+      }
+      explode(e.x+e.w/2, e.y+e.h/2, "#ff5b3d", 24, 5.5);
+      sfx(120,.4,"sawtooth",.12,-60); shake = Math.max(shake,6);
+    }
   }
   // 死亡的敌人立即移除；出界/坠落的也移除
   enemies = enemies.filter(e => !e.dead && e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
@@ -742,17 +786,25 @@ function drawSoldier(e){
     return;
   }
   // 士兵
-  const run = e.mode==="runner";
+  const run = e.mode==="runner" || e.mode==="bomber";
   const bob = run?Math.sin(t*0.5)*1.5:0;
   ctx.save(); ctx.translate(x+e.w/2, y+bob);
   const dir = (player.x > e.x)?1:-1; ctx.scale(dir,1); ctx.translate(-e.w/2,0);
-  ctx.fillStyle="#5a6a3a"; // 军绿
+  const bodyCol = e.mode==="bomber" ? "#b0431f" : "#5a6a3a";
+  const helmCol = e.mode==="bomber" ? "#5a1a10" : "#3d4a26";
+  ctx.fillStyle=bodyCol;
   if(run){ const lo=Math.sin(t*0.5)*5; ctx.fillRect(3,26,7,14+lo*0.4); ctx.fillRect(13,26,7,14-lo*0.4); }
   else { ctx.fillRect(3,26,7,14); ctx.fillRect(13,26,7,14); }
   ctx.fillRect(2,12,19,14);
   ctx.fillStyle="#c9a17a"; ctx.fillRect(6,3,11,9);
-  ctx.fillStyle="#3d4a26"; ctx.fillRect(4,0,15,4); // 头盔
-  ctx.fillStyle="#333"; ctx.fillRect(15,14,12,4);  // 枪
+  ctx.fillStyle=helmCol; ctx.fillRect(4,0,15,4); // 头盔
+  if(e.mode==="bomber"){
+    // 胸前引信灯：快速闪烁预警
+    ctx.fillStyle = (Math.floor(t/6)%2)?"#ffe86b":"#ff2200";
+    ctx.fillRect(9,16,6,5);
+  } else {
+    ctx.fillStyle="#333"; ctx.fillRect(15,14,12,4);  // 枪
+  }
   ctx.restore();
 }
 function drawBoss(){
@@ -799,6 +851,21 @@ function drawBoss(){
     ctx.fillStyle="#fff"; ctx.font="12px monospace"; ctx.fillText("要塞核心", W/2-30, 56);
   }
 }
+function drawMedals(){
+  for(const m of medals){
+    if(m.taken) continue;
+    const x=m.x-cam+13, y=m.y+Math.sin(m.bob)*5+13;
+    // 绶带
+    ctx.fillStyle="#d42a2a";
+    ctx.beginPath(); ctx.moveTo(x-8,y-17); ctx.lineTo(x+8,y-17); ctx.lineTo(x,y-4); ctx.closePath(); ctx.fill();
+    // 勋章主体
+    ctx.fillStyle="#ffd34d"; ctx.beginPath(); ctx.arc(x,y,10,0,7); ctx.fill();
+    ctx.strokeStyle="#b8860b"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(x,y,10,0,7); ctx.stroke();
+    // 高光
+    ctx.fillStyle="#fff8dc"; ctx.beginPath(); ctx.arc(x-3,y-3,3,0,7); ctx.fill();
+  }
+}
 function drawBullets(){
   for(const b of bullets){
     if(b.beam){ // 镭射光束
@@ -817,7 +884,7 @@ function drawBullets(){
   }
   ctx.fillStyle="#ff7b5b";
   for(const b of ebullets){
-    ctx.beginPath(); ctx.arc(b.x-cam, b.y, 4.5, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x-cam, b.y, b.r||4.5, 0, 7); ctx.fill();
   }
 }
 function drawParticles(){
@@ -900,6 +967,7 @@ function render(){
   }
   drawTerrain();
   drawPowerups();
+  drawMedals();
   for(const e of enemies) drawSoldier(e);
   drawBoss();
   if(player.crouch) drawPlayerCrouch(); else drawPlayer();

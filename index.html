@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → / A D 移动 &nbsp;|&nbsp; ↑ / W / 空格 跳跃 &nbsp;|&nbsp; J / X 开火（按住↑向上射击） &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; ↑ 跳跃 &nbsp;|&nbsp; ↓ 蹲下（可躲子弹） &nbsp;|&nbsp; 数字 1 开火 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -65,12 +65,12 @@ window.addEventListener("keydown", e => {
   ac(); // 首次按键激活音频
 });
 window.addEventListener("keyup", e => keys[e.code] = false);
-const kLeft  = () => keys["ArrowLeft"]  || keys["KeyA"];
-const kRight = () => keys["ArrowRight"] || keys["KeyD"];
-const kUp    = () => keys["ArrowUp"]    || keys["KeyW"];
-const kJump  = () => keys["Space"]      || keys["ArrowUp"] === undefined ? keys["Space"] : keys["Space"]; // 只用空格+↓不跳
-const kShoot = () => keys["KeyJ"]       || keys["KeyX"];
-const kJumpDown = () => keys["Space"];
+const kLeft  = () => keys["ArrowLeft"];
+const kRight = () => keys["ArrowRight"];
+const kUp    = () => keys["ArrowUp"];    // 跳跃
+const kDown  = () => keys["ArrowDown"];  // 蹲下
+const kShoot = () => keys["Digit1"] || keys["Numpad1"];
+const kJumpDown = () => keys["Space"] || keys["ArrowUp"];
 
 // ---------- 关卡数据 ----------
 const GROUND_Y = 460;                 // 地面顶部
@@ -82,42 +82,42 @@ const grounds = [
   {x0:2600, x1:3650},
   {x0:3800, x1:LEVEL_W+200},
 ];
-// 悬空平台
+// 悬空平台（加长版，保证可跳跃通过）
 const platforms = [
-  {x:420,  y:360, w:180, h:16},
-  {x:760,  y:300, w:150, h:16},
-  {x:1180, y:350, w:170, h:16},
-  {x:1500, y:290, w:160, h:16},
-  {x:1900, y:360, w:200, h:16},
-  {x:2300, y:300, w:150, h:16},
-  {x:2750, y:350, w:180, h:16},
-  {x:3100, y:290, w:170, h:16},
-  {x:3450, y:360, w:180, h:16},
-  {x:3950, y:310, w:170, h:16},
-  {x:4350, y:370, w:200, h:16},
+  {x:420,  y:360, w:220, h:16},
+  {x:760,  y:330, w:200, h:16},
+  {x:1180, y:360, w:220, h:16},
+  {x:1500, y:320, w:220, h:16},
+  {x:1900, y:360, w:240, h:16},
+  {x:2300, y:330, w:200, h:16},
+  {x:2750, y:360, w:220, h:16},
+  {x:3100, y:330, w:220, h:16},
+  {x:3450, y:360, w:220, h:16},
+  {x:3950, y:340, w:220, h:16},
+  {x:4350, y:370, w:240, h:16},
 ];
 // 检查点（复活位置）
 const checkpoints = [0, 1450, 2650, 3850];
-// 敌人触发点：相机到达 x 时生成
+// 敌人触发点：相机到达 x 时生成（生成点全部对齐地面/平台顶面，杜绝浮空）
 const triggers = [
   {x:300,  type:"sniper", px:800,  py:GROUND_Y-40},
   {x:700,  type:"runner"},
-  {x:1000, type:"sniper", px:1350, py:250},
+  {x:1000, type:"sniper", px:1430, py:GROUND_Y-40},
   {x:1400, type:"runner"},
-  {x:1750, type:"turret", px:1990, py:335},
+  {x:1750, type:"turret", px:2040, py:320},
   {x:2100, type:"runner"},
-  {x:2350, type:"sniper", px:2450, py:GROUND_Y-40},
+  {x:2350, type:"sniper", px:2650, py:GROUND_Y-40},
   {x:2700, type:"runner"},
-  {x:2950, type:"turret", px:3260, py:265},
+  {x:2950, type:"turret", px:3200, py:290},
   {x:3200, type:"runner"},
   {x:3500, type:"sniper", px:3550, py:GROUND_Y-40},
   {x:3850, type:"runner"},
-  {x:4100, type:"turret", px:4530, py:345},
+  {x:4100, type:"turret", px:4500, py:330},
   {x:4400, type:"runner"},
   {x:4600, type:"sniper", px:4700, py:GROUND_Y-40},
 ];
 // 散弹枪道具（S 火种）
-const powerup = { x:2620, y:220, w:30, h:24, taken:false, bob:0 };
+const powerup = { x:2800, y:280, w:30, h:24, taken:false, bob:0 };
 
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
@@ -136,7 +136,15 @@ function startGame(){
   bullets=[]; ebullets=[]; enemies=[]; particles=[];
   cam=0; lives=3; score=0; killCount=0;
   checkpoint=0; usedTriggers=new Set(); autoSpawnT=0;
-  boss = { x:5050, y:GROUND_Y-150, w:70, h:150, hp:30, maxHp:30, active:false, dead:false, t:0, burst:0 };
+  // 原版第一关风格要塞：墙体 + 上下两门火炮 + 底部闪烁弱点核心
+  boss = {
+    wallX: 5080, active:false, dead:false, t:0,
+    core:   {x:5092, y:GROUND_Y-110, w:56, h:110, hp:30, maxHp:30, dead:false},
+    cannons:[
+      {x:5040, y:GROUND_Y-210, w:40, h:32, hp:8, maxHp:8, dead:false, t:60},
+      {x:5040, y:GROUND_Y-60,  w:40, h:32, hp:8, maxHp:8, dead:false, t:150},
+    ],
+  };
   powerup.taken=false;
   resetPlayer(60);
   state="play"; stateTimer=0; shake=0;
@@ -144,6 +152,13 @@ function startGame(){
 
 // ---------- 工具 ----------
 const aabb = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+// 玩家受击碰撞盒：站立时为全身；蹲下时压低到下半身（顶部在胸口高度之下，子弹从头顶飞过）
+function hitbox(){
+  const p = player;
+  return p.crouch ? {x:p.x, y:p.y+22, w:p.w, h:p.h-22} : {x:p.x, y:p.y, w:p.w, h:p.h};
+}
+// 敌方瞄准点：固定瞄准站立时的胸口高度——蹲下即可让子弹从头顶飞过
+function chestY(){ return player.y + 14; }
 function groundTopAt(x){
   for(const g of grounds) if(x>=g.x0 && x<=g.x1) return GROUND_Y;
   return Infinity; // 水坑
@@ -172,9 +187,13 @@ function update(){
   p.animT++;
   if(p.inv>0) p.inv--;
   const spd = 3.2;
+  // 蹲下：仅地面可蹲，蹲下时不能移动
+  p.crouch = !!(kDown() && p.onGround);
   p.vx = 0;
-  if(kLeft()) { p.vx=-spd; p.face=-1; }
-  if(kRight()){ p.vx= spd; p.face= 1; }
+  if(!p.crouch){
+    if(kLeft()) { p.vx=-spd; p.face=-1; }
+    if(kRight()){ p.vx= spd; p.face= 1; }
+  }
   // 跳跃（允许土狼时间简化：onGround 即可）
   if(kJumpDown() && p.onGround){ p.vy=-12.6; p.onGround=false; S.jump(); }
   p.vy += 0.55; if(p.vy>14)p.vy=14;
@@ -202,16 +221,13 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
-  // 射击
+  // 射击（数字 1 键）
   if(p.fireCd>0) p.fireCd--;
   if(kShoot() && p.fireCd<=0){
     p.fireCd = p.spread ? 16 : 10;
-    const bx = p.x + p.w/2, by = p.y + 12;
+    const bx = p.x + p.w/2, by = p.crouch ? p.y + 28 : p.y + 12;
     const mk = (vx,vy)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:60});
-    if(kUp()){ // 向上射
-      if(p.spread){ mk(-2.5,-10); mk(0,-10.5); mk(2.5,-10); }
-      else mk(0,-10.5);
-    } else if(p.spread){
+    if(p.spread){
       mk(p.face*10,-2.2); mk(p.face*10.5,0); mk(p.face*10,2.2);
     } else {
       mk(p.face*10.5,0);
@@ -255,21 +271,38 @@ function update(){
       if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
         e.cd = 130; e.burst = 3;
       }
-      if(e.burst>0 && e.cd%20===5 && e.cd>20){ /* 借用 cd 计数 */ }
       if(e.burst>0){
         e.bt = (e.bt||0)+1;
         if(e.bt%18===1){
-          const d = Math.hypot(dx,dy)||1;
-          ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:dx/d*5, vy:dy/d*5, life:160});
+          // 三向扇形散射：以玩家为中心 ±22°，覆盖更多朝向
+          const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = chestY() - (e.y+8);
+          const base = Math.atan2(dy,dx);
+          for(let k=-1;k<=1;k++){
+            const ang = base + k*0.38;
+            ebullets.push({x:e.x+e.w/2, y:e.y+8, w:7, h:7, vx:Math.cos(ang)*4.8, vy:Math.sin(ang)*4.8, life:160});
+          }
           S.shoot(); e.burst--;
         }
       }
     } else { // soldier
       if(e.mode==="sniper"){
+        // 狙击手不移动，但同样受重力，确保始终贴在支撑面上
+        const feetPrevS = e.y + e.h;
+        e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
+        if(e.vy >= 0){
+          const footL = e.x + 2, footR = e.x + e.w - 2;
+          for(const pl of platforms){
+            if(footR > pl.x && footL < pl.x + pl.w &&
+               feetPrevS <= pl.y + 2 && e.y + e.h >= pl.y){ e.y = pl.y - e.h; e.vy = 0; break; }
+          }
+          if(e.vy > 0 && feetPrevS <= GROUND_Y + 2 && e.y + e.h >= GROUND_Y && footOnGround(footL, footR)){
+            e.y = GROUND_Y - e.h; e.vy = 0;
+          }
+        }
         e.cd--;
         if(!e.dead && e.cd<=0){
           e.cd = 110;
-          const dx=(p.x+p.w/2)-(e.x+e.w/2), dy=(p.y+p.h/2)-(e.y+10), d=Math.hypot(dx,dy)||1;
+          const dx=(p.x+p.w/2)-(e.x+e.w/2), dy=chestY()-(e.y+10), d=Math.hypot(dx,dy)||1;
           ebullets.push({x:e.x+e.w/2,y:e.y+10,w:6,h:6,vx:dx/d*4.6,vy:dy/d*4.6,life:160});
           S.shoot();
         }
@@ -301,28 +334,43 @@ function update(){
       }
     }
     // 敌人撞到玩家
-    if(!e.dead && !p.dead && p.inv<=0 && aabb(p,e)) hurtPlayer();
+    if(!e.dead && !p.dead && p.inv<=0 && aabb(hitbox(),e)) hurtPlayer();
   }
   // 死亡的敌人立即移除；出界/坠落的也移除
   enemies = enemies.filter(e => !e.dead && e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
 
-  // ----- Boss -----
+  // ----- Boss（要塞：两门火炮 + 弱点核心） -----
   const b = boss;
   if(!b.dead){
     if(!b.active && p.x > 4650){ b.active = true; }
     if(b.active){
       b.t++;
       cam = Math.min(cam+6, LEVEL_W - W);
-      if(b.t % 110 === 0) spawnRunner(true); // Boss 召唤小兵
-      if(b.t % 160 === 20){
-        const dx=(p.x+p.w/2)-(b.x+b.w/2), dy=(p.y+p.h/2)-(b.y+40), d=Math.hypot(dx,dy)||1;
-        for(let k=-1;k<=1;k++){
-          const ang = Math.atan2(dy,dx) + k*0.25;
-          ebullets.push({x:b.x, y:b.y+40, w:8, h:8, vx:Math.cos(ang)*5.5, vy:Math.sin(ang)*5.5, life:200});
+      if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
+      // 火炮：交替三向扇形散射
+      for(const c of b.cannons){
+        if(c.dead) continue;
+        c.t++;
+        if(c.t % 150 === 0){
+          const dx=(p.x+p.w/2)-(c.x), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
+          for(let k=-1;k<=1;k++){
+            const ang = base + k*0.3;
+            ebullets.push({x:c.x, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:220});
+          }
+          S.shoot();
+        }
+        if(aabb(hitbox(),c) && p.inv<=0) hurtPlayer();
+      }
+      // 核心：旋转环形弹幕
+      const core = b.core;
+      if(!core.dead && b.t % 170 === 30){
+        for(let k=0;k<6;k++){
+          const ang = (b.t*0.05) + k*Math.PI/3;
+          ebullets.push({x:core.x, y:core.y+core.h/2, w:8, h:8, vx:Math.cos(ang)*4.2, vy:Math.sin(ang)*4.2, life:220});
         }
         S.shoot();
       }
-      if(aabb(p,b) && p.inv<=0) hurtPlayer();
+      if(!core.dead && aabb(hitbox(),core) && p.inv<=0) hurtPlayer();
     }
   }
 
@@ -341,13 +389,23 @@ function update(){
         break;
       }
     }
-    // 打 Boss
-    if(bl.life>0 && boss.active && !boss.dead && aabb(bl,boss)){
-      bl.life=0; boss.hp--; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
-      if(boss.hp<=0){
-        boss.dead=true; score+=5000; S.bossDown();
-        explode(boss.x+boss.w/2,boss.y+boss.h/2,"#ff5b3d",40,7); shake=30;
-        setTimeout(()=>{ state="win"; S.clear(); }, 1600);
+    // 打 Boss：先炮台后核心
+    if(bl.life>0 && boss.active && !boss.dead){
+      for(const c of boss.cannons){
+        if(!c.dead && aabb(bl,c)){
+          bl.life=0; c.hp--; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
+          if(c.hp<=0){ c.dead=true; score+=800; explode(c.x+c.w/2,c.y+c.h/2,"#ff9b4d",20,5); shake=8; }
+          break;
+        }
+      }
+      const core = boss.core;
+      if(bl.life>0 && !core.dead && aabb(bl,core)){
+        bl.life=0; core.hp--; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
+        if(core.hp<=0){
+          core.dead=true; boss.dead=true; score+=5000; S.bossDown();
+          explode(core.x+core.w/2, core.y+core.h/2, "#ff5b3d", 40, 7); shake=30;
+          setTimeout(()=>{ state="win"; S.clear(); }, 1800);
+        }
       }
     }
   }
@@ -355,7 +413,7 @@ function update(){
 
   for(const bl of ebullets){
     bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
-    if(p.inv<=0 && !p.dead && aabb(bl,p)){ bl.life=0; hurtPlayer(); }
+    if(p.inv<=0 && !p.dead && aabb(hitbox(),bl)){ bl.life=0; hurtPlayer(); }
   }
   ebullets = ebullets.filter(b=>b.life>0);
 
@@ -470,9 +528,22 @@ function drawPlayer(){
   ctx.fillRect(16,3,7,3);
   // 枪
   ctx.fillStyle="#444";
-  const aimUp = kUp();
-  if(aimUp) ctx.fillRect(9,-8,4,18);
-  else ctx.fillRect(14,17,12,4);
+  ctx.fillRect(14,17,12,4);
+  ctx.restore();
+}
+function drawPlayerCrouch(){
+  const p = player;
+  if(p.inv>0 && Math.floor(p.inv/4)%2===0) return;
+  const x = p.x-cam, y = p.y;
+  ctx.save(); ctx.translate(x+p.w/2, y); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
+  // 蹲姿：蜷缩下半身
+  ctx.fillStyle="#2857a8"; ctx.fillRect(3,34,16,4);          // 蜷腿
+  ctx.fillStyle="#e8a878"; ctx.fillRect(2,28,18,7);          // 躯干
+  ctx.fillStyle="#7a4a28"; ctx.fillRect(2,30,18,2);          // 弹带
+  ctx.fillStyle="#e8a878"; ctx.fillRect(5,17,12,11);         // 头
+  ctx.fillStyle="#d42a2a"; ctx.fillRect(4,15,14,5);          // 头巾
+  ctx.fillRect(16,17,7,3);
+  ctx.fillStyle="#444";    ctx.fillRect(14,32,12,4);         // 枪
   ctx.restore();
 }
 function drawSoldier(e){
@@ -500,28 +571,47 @@ function drawSoldier(e){
   ctx.restore();
 }
 function drawBoss(){
-  const b = boss, x=b.x-cam, y=b.y;
-  if(x>W+100) return;
-  // 要塞墙
+  const b = boss, wx = b.wallX - cam;
+  if(wx > W + 100) return;
+  // 要塞墙体
   ctx.fillStyle="#4a4440";
-  ctx.fillRect(x+40, 0, LEVEL_W - b.x + 300, GROUND_Y);
+  ctx.fillRect(wx, 0, LEVEL_W - b.wallX + 300, GROUND_Y);
   ctx.fillStyle="#3a3531";
-  for(let wy=0; wy<GROUND_Y; wy+=40) ctx.fillRect(x+40, wy, LEVEL_W-b.x+300, 3);
-  // 大门（Boss 本体）
-  ctx.fillStyle = b.dead ? "#333" : "#6b2f2a";
-  ctx.fillRect(x, y, b.w, b.h);
-  ctx.fillStyle = b.dead ? "#222" : "#8a4038";
-  ctx.fillRect(x+8, y+8, b.w-16, b.h-16);
-  // 炮口
-  if(!b.dead){
-    ctx.fillStyle="#1a1a1a"; ctx.beginPath(); ctx.arc(x+b.w/2, y+40, 12, 0, 7); ctx.fill();
-    ctx.fillStyle = (b.t%40<20)?"#ff5b3d":"#5a1a10"; ctx.beginPath(); ctx.arc(x+b.w/2, y+40, 5, 0, 7); ctx.fill();
-    // 血条
-    ctx.fillStyle="#000a"; ctx.fillRect(W/2-160, 24, 320, 16);
-    ctx.fillStyle="#ff5b3d"; ctx.fillRect(W/2-158, 26, 316*b.hp/b.maxHp, 12);
-    ctx.fillStyle="#fff"; ctx.font="12px monospace"; ctx.fillText("要塞之门", W/2-30, 56);
+  for(let wy=0; wy<GROUND_Y; wy+=40) ctx.fillRect(wx, wy, LEVEL_W-b.wallX+300, 3);
+  // 铆钉
+  ctx.fillStyle="#5a544e";
+  for(let wy=20; wy<GROUND_Y; wy+=60)
+    for(let rx=wx+18; rx<wx+150; rx+=44) ctx.fillRect(rx, wy, 6, 6);
+  // 弱点核心（大门中央，闪烁）
+  const c = b.core, cx = c.x-cam;
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(cx-6, c.y-6, c.w+12, c.h+12);
+  if(!c.dead){
+    const blink = Math.floor(b.t/12)%2===0;
+    ctx.fillStyle = blink ? "#ff5b3d" : "#8a1a10";
+    ctx.fillRect(cx, c.y, c.w, c.h);
+    ctx.fillStyle = blink ? "#ffd0b0" : "#5a1a10";
+    ctx.beginPath(); ctx.arc(cx+c.w/2, c.y+c.h/2, 14, 0, 7); ctx.fill();
   } else {
-    if(Math.random()<0.15) explode(b.x+Math.random()*b.w, b.y+Math.random()*b.h, "#ff9b4d", 4, 3);
+    ctx.fillStyle="#111"; ctx.fillRect(cx, c.y, c.w, c.h);
+    if(Math.random()<0.1) explode(c.x+Math.random()*c.w, c.y+Math.random()*c.h, "#ff9b4d", 4, 3);
+  }
+  // 上下两门火炮
+  for(const g of b.cannons){
+    const gx = g.x-cam, gy=g.y;
+    ctx.fillStyle = g.dead ? "#2f2f2f" : "#3a3f4a";
+    ctx.fillRect(gx, gy, g.w, g.h);
+    if(!g.dead){
+      ctx.fillStyle="#565e6e"; ctx.fillRect(gx+g.w-14, gy+4, 14, g.h-8);
+      ctx.fillStyle = (Math.floor(g.t/20)%2)?"#ff5b3d":"#5a1a10";
+      ctx.beginPath(); ctx.arc(gx+10, gy+g.h/2, 6, 0, 7); ctx.fill();
+    }
+  }
+  // 核心血条
+  if(!b.dead){
+    ctx.fillStyle="#000a"; ctx.fillRect(W/2-160, 24, 320, 16);
+    ctx.fillStyle="#ff5b3d"; ctx.fillRect(W/2-158, 26, 316*c.hp/c.maxHp, 12);
+    ctx.fillStyle="#fff"; ctx.font="12px monospace"; ctx.fillText("要塞核心", W/2-30, 56);
   }
 }
 function drawBullets(){
@@ -588,13 +678,13 @@ function render(){
   drawPowerup();
   for(const e of enemies) drawSoldier(e);
   drawBoss();
-  drawPlayer();
+  if(player.crouch) drawPlayerCrouch(); else drawPlayer();
   drawBullets();
   drawParticles();
   ctx.restore();
   drawHUD();
   if(state==="over") drawOverlay("游戏结束", "击杀 " + killCount + " · 得分 " + score, "#ff5b3d");
-  if(state==="win")  drawOverlay("第一关 突破！", "得分 " + score + " · 感谢测试", "#4dff88");
+  if(state==="win")  drawOverlay("游戏结束", "恭喜通关！得分 " + score + " · 感谢测试", "#4dff88");
 }
 
 // ---------- 游戏状态 ----------

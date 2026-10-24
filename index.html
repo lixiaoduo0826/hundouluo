@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 数字 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 数字 1 开火（按住 ↑ + 1 朝上射击） &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; ↑ 瞄上 / ↑+方向 斜上瞄准 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -116,8 +116,12 @@ const triggers = [
   {x:4400, type:"runner"},
   {x:4600, type:"sniper", px:4700, py:GROUND_Y-40},
 ];
-// 散弹枪道具（S 火种）
-const powerup = { x:2800, y:280, w:30, h:24, taken:false, bob:0 };
+// 武器道具（借鉴原版：M 机枪 / S 散弹枪 / L 镭射枪），胶囊外观 + 枪械剪影
+const powerups = [
+  {type:"L", x:1560, y:270, w:34, h:26, taken:false, bob:0},
+  {type:"S", x:2800, y:270, w:34, h:26, taken:false, bob:0},
+  {type:"M", x:3990, y:300, w:34, h:26, taken:false, bob:0},
+];
 
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
@@ -128,7 +132,7 @@ function resetPlayer(x){
   player = {
     x:x, y:GROUND_Y-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
-    fireCd:0, spread:false, animT:0, dead:false,
+    fireCd:0, weapon:"N", aimAng:0, animT:0, dead:false,
   };
 }
 
@@ -145,7 +149,7 @@ function startGame(){
       {x:5040, y:GROUND_Y-60,  w:40, h:32, hp:8, maxHp:8, dead:false, t:150},
     ],
   };
-  powerup.taken=false;
+  for(const pu of powerups) pu.taken=false;
   resetPlayer(60);
   state="play"; stateTimer=0; shake=0;
 }
@@ -221,29 +225,47 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
+  // 瞄准方向：单按 ↑ = 正上；↑ + 左/右 = 斜上 35°（跟随移动方向）
+  const aimingUp = kUp() && !p.crouch;
+  const movingH = kLeft() || kRight();
+  p.aimAng = aimingUp ? (movingH ? -0.61 : -Math.PI/2) : 0;
+
   // 射击（数字 1 键）
   if(p.fireCd>0) p.fireCd--;
   if(kShoot() && p.fireCd<=0){
-    p.fireCd = p.spread ? 16 : 10;
-    const bx = p.x + p.w/2, by = p.crouch ? p.y + 28 : p.y + 12;
-    const mk = (vx,vy)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:60});
-    if(kUp()){ // 按住 ↑ 开火：朝上喷子弹
-      if(p.spread){ mk(-2.5,-10); mk(0,-10.5); mk(2.5,-10); }
-      else mk(0,-10.5);
-    } else if(p.spread){
-      mk(p.face*10,-2.2); mk(p.face*10.5,0); mk(p.face*10,2.2);
-    } else {
-      mk(p.face*10.5,0);
+    const mvx = Math.cos(p.aimAng), mvy = Math.sin(p.aimAng); // 局部坐标：+x 为面朝方向
+    const bx = p.x + p.w/2 + (p.crouch ? 0 : p.face*mvx*8);
+    const by = p.crouch ? p.y+28 : p.y+12+mvy*8;
+    const mk = (vx,vy)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:70});
+    if(p.weapon==="L"){ // 镭射枪：贯穿光束，直扫到屏幕边缘
+      p.fireCd = 45;
+      bullets.push({beam:true, x:bx, y:by, dx:p.face*mvx, dy:mvy, life:14, hit:new Set()});
+      sfx(1200,.25,"sawtooth",.09,-900);
+    } else if(p.weapon==="M"){ // 机枪：高射速连发
+      p.fireCd = 5;
+      mk(p.face*mvx*12, mvy*12);
+      S.shoot();
+    } else if(p.weapon==="S"){ // 散弹枪：三向扇形
+      p.fireCd = 16;
+      for(let k=-1;k<=1;k++){
+        const ang = p.aimAng + k*0.38;
+        mk(p.face*Math.cos(ang)*10.5, Math.sin(ang)*10.5);
+      }
+      S.shoot();
+    } else { // 普通步枪
+      p.fireCd = 10;
+      mk(p.face*mvx*10.5, mvy*10.5);
+      S.shoot();
     }
-    S.shoot();
   }
 
-  // 道具
-  const pu = powerup;
-  pu.bob += 0.08;
-  if(!pu.taken && aabb(p, {x:pu.x,y:pu.y+Math.sin(pu.bob)*5,w:pu.w,h:pu.h})){
-    pu.taken = true; p.spread = true; score += 500; S.power();
-    explode(pu.x+15, pu.y+12, "#ffd34d", 14, 3);
+  // 道具拾取
+  for(const pu of powerups){
+    pu.bob += 0.08;
+    if(!pu.taken && aabb(p, {x:pu.x,y:pu.y+Math.sin(pu.bob)*5,w:pu.w,h:pu.h})){
+      pu.taken = true; p.weapon = pu.type; score += 500; S.power();
+      explode(pu.x+17, pu.y+13, "#ffd34d", 14, 3);
+    }
   }
 
   // ----- 相机 -----
@@ -388,6 +410,46 @@ function update(){
 
   // ----- 子弹 -----
   for(const bl of bullets){
+    // 镭射光束：静止贯穿，对路径上所有目标造成一次伤害
+    if(bl.beam){
+      bl.life--;
+      const LEN = 950;
+      const hitTest = (r)=>{
+        for(let s=0;s<=LEN;s+=12){
+          const px=bl.x+bl.dx*s, py=bl.y+bl.dy*s;
+          if(px>=r.x && px<=r.x+r.w && py>=r.y && py<=r.y+r.h) return true;
+        }
+        return false;
+      };
+      for(const e of enemies){
+        if(!e.dead && !bl.hit.has(e) && hitTest(e)){
+          bl.hit.add(e); e.hp-=3;
+          if(e.hp<=0){
+            e.dead=true; killCount++;
+            score += (e.kind==="turret")?500:(e.mode==="sniper"?200:100);
+            explode(e.x+e.w/2,e.y+e.h/2,"#ff9b4d",14,4); S.hitE();
+          }
+        }
+      }
+      if(boss.active && !boss.dead){
+        for(const c of boss.cannons){
+          if(!c.dead && !bl.hit.has(c) && hitTest(c)){
+            bl.hit.add(c); c.hp-=3;
+            if(c.hp<=0){ c.dead=true; score+=800; explode(c.x+c.w/2,c.y+c.h/2,"#ff9b4d",20,5); shake=8; S.hitE(); }
+          }
+        }
+        const core = boss.core;
+        if(!core.dead && !bl.hit.has(core) && hitTest(core)){
+          bl.hit.add(core); core.hp-=3;
+          if(core.hp<=0){
+            core.dead=true; boss.dead=true; score+=5000; S.bossDown();
+            explode(core.x+core.w/2, core.y+core.h/2, "#ff5b3d", 40, 7); shake=30;
+            setTimeout(()=>{ state="win"; S.clear(); }, 1800);
+          }
+        }
+      }
+      continue;
+    }
     bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
     // 打敌人
     for(const e of enemies){
@@ -452,6 +514,8 @@ function hurtPlayer(fell){
   let cp = 0;
   for(const c of checkpoints) if(c <= p.x+50) cp = Math.max(cp,c);
   checkpoint = cp;
+  // Boss 战中阵亡：解除镜头锁定，重新靠近后 Boss 再次激活
+  if(boss && !boss.dead) boss.active = false;
   resetPlayer(checkpoint + 20);
   // 清掉玩家身边子弹，防止连续受伤
   ebullets = ebullets.filter(b => Math.abs(b.x - p.x) > 150);
@@ -538,9 +602,16 @@ function drawPlayer(){
   ctx.fillStyle="#e8a878"; ctx.fillRect(5,3,12,11);
   ctx.fillStyle="#d42a2a"; ctx.fillRect(4,1,14,5);
   ctx.fillRect(16,3,7,3);
-  // 枪
+  // 枪（跟随瞄准方向旋转）+ 瞄准指示箭头
   ctx.fillStyle="#444";
-  ctx.fillRect(14,17,12,4);
+  ctx.save(); ctx.translate(13,18); ctx.rotate(p.aimAng||0); ctx.fillRect(0,-2,14,4); ctx.restore();
+  if(p.aimAng){
+    const ang=p.aimAng, mx=13+Math.cos(ang)*20, my=18+Math.sin(ang)*20;
+    ctx.fillStyle="#ffd34d";
+    ctx.save(); ctx.translate(mx,my); ctx.rotate(ang);
+    ctx.beginPath(); ctx.moveTo(9,0); ctx.lineTo(-2,-6); ctx.lineTo(-2,6); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
   ctx.restore();
 }
 function drawPlayerCrouch(){
@@ -632,8 +703,21 @@ function drawBoss(){
   }
 }
 function drawBullets(){
-  ctx.fillStyle="#ffe86b";
-  for(const b of bullets){ ctx.fillRect(b.x-cam-3, b.y-3, 6, 6); }
+  for(const b of bullets){
+    if(b.beam){ // 镭射光束
+      const ex=b.x+b.dx*950, ey=b.y+b.dy*950;
+      ctx.globalAlpha = Math.min(1, b.life/8);
+      ctx.lineCap="round";
+      ctx.strokeStyle="#5afff0"; ctx.lineWidth=7;
+      ctx.beginPath(); ctx.moveTo(b.x-cam,b.y); ctx.lineTo(ex-cam,ey); ctx.stroke();
+      ctx.strokeStyle="#eaffff"; ctx.lineWidth=2.5;
+      ctx.beginPath(); ctx.moveTo(b.x-cam,b.y); ctx.lineTo(ex-cam,ey); ctx.stroke();
+      ctx.globalAlpha=1;
+      continue;
+    }
+    ctx.fillStyle="#ffe86b";
+    ctx.fillRect(b.x-cam-3, b.y-3, 6, 6);
+  }
   ctx.fillStyle="#ff7b5b";
   for(const b of ebullets){
     ctx.beginPath(); ctx.arc(b.x-cam, b.y, 4.5, 0, 7); ctx.fill();
@@ -647,12 +731,35 @@ function drawParticles(){
   }
   ctx.globalAlpha = 1;
 }
-function drawPowerup(){
-  if(powerup.taken) return;
-  const x=powerup.x-cam, y=powerup.y+Math.sin(powerup.bob)*5;
-  ctx.fillStyle="#c0c8d8"; ctx.fillRect(x,y,powerup.w,powerup.h);
-  ctx.fillStyle="#d42a2a"; ctx.fillRect(x+2,y+2,powerup.w-4,powerup.h-4);
-  ctx.fillStyle="#fff"; ctx.font="bold 16px monospace"; ctx.fillText("S", x+10, y+18);
+function drawPowerups(){
+  for(const pu of powerups){
+    if(pu.taken) continue;
+    const x=pu.x-cam, y=pu.y+Math.sin(pu.bob)*5;
+    // 胶囊外壳
+    ctx.fillStyle="#c0c8d8"; ctx.fillRect(x,y,pu.w,pu.h);
+    ctx.fillStyle="#d42a2a"; ctx.fillRect(x+2,y+2,pu.w-4,pu.h-4);
+    ctx.fillStyle="#fff"; ctx.fillRect(x+3,y+3,pu.w-6,2);
+    // 枪械剪影
+    ctx.fillStyle="#101418";
+    if(pu.type==="M"){ // 机枪：粗枪身 + 弹匣 + 枪托
+      ctx.fillRect(x+5,y+11,20,6);
+      ctx.fillRect(x+11,y+17,5,6);
+      ctx.fillRect(x+22,y+9,7,3);
+    } else if(pu.type==="S"){ // 散弹枪：三根扩散枪管
+      ctx.save(); ctx.translate(x+7,y+16);
+      for(let k=-1;k<=1;k++){
+        ctx.save(); ctx.rotate(k*0.35);
+        ctx.fillRect(0,-1.5,20,3);
+        ctx.restore();
+      }
+      ctx.fillRect(0,-1,8,7);
+      ctx.restore();
+    } else { // 镭射枪：长管 + 线圈环
+      ctx.fillRect(x+4,y+13,24,4);
+      for(let r=0;r<3;r++) ctx.fillRect(x+8+r*5,y+10,3,10);
+      ctx.fillRect(x+12,y+17,5,5);
+    }
+  }
 }
 function drawHUD(){
   ctx.fillStyle="#fff"; ctx.font="bold 16px monospace";
@@ -662,7 +769,10 @@ function drawHUD(){
     ctx.fillStyle="#e8a878"; ctx.fillRect(20+i*24, 46, 10, 12);
     ctx.fillStyle="#d42a2a"; ctx.fillRect(20+i*24, 44, 10, 4);
   }
-  if(player.spread){ ctx.fillStyle="#ffd34d"; ctx.fillText("S 散弹枪", 20, 84); }
+  if(player.weapon!=="N"){
+    const names = {S:"散弹枪", M:"机枪", L:"镭射枪"};
+    ctx.fillStyle="#ffd34d"; ctx.fillText(player.weapon + " " + names[player.weapon], 20, 84);
+  }
   // 进度条
   ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
   ctx.fillStyle="#4da6ff"; ctx.fillRect(W/2-150, H-24, 300*Math.min(1,cam/(LEVEL_W-W)), 8);
@@ -692,7 +802,7 @@ function render(){
     return;
   }
   drawTerrain();
-  drawPowerup();
+  drawPowerups();
   for(const e of enemies) drawSoldier(e);
   drawBoss();
   if(player.crouch) drawPlayerCrouch(); else drawPlayer();

@@ -274,7 +274,7 @@ function resetPlayer(x){
   player = {
     x:x, y:groundYAt(x+11)-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
-    fireCd:0, weapon:"N", aimAng:0, aimLatch:0, animT:0, dead:false,
+    fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, animT:0, dead:false,
   };
 }
 
@@ -376,12 +376,20 @@ function update(){
   if(p.fireCd>0) p.fireCd--;
   if(kShoot()) tryShoot(false);
 
-  // 道具拾取
+  // 道具拾取：同类武器包 = 升级（最高 Lv2），不同类 = 换枪
   for(const pu of powerups){
     pu.bob += 0.08;
     if(!pu.taken && aabb(p, {x:pu.x,y:pu.y+Math.sin(pu.bob)*5,w:pu.w,h:pu.h})){
-      pu.taken = true; p.weapon = pu.type; score += 500; S.power();
+      pu.taken = true; score += 500; S.power();
       explode(pu.x+17, pu.y+13, "#ffd34d", 14, 3);
+      if(p.weapon === pu.type){
+        const lv = Math.min(2, (p.wlv[pu.type]||0) + 1);
+        p.wlv[pu.type] = lv;
+        score += 500 * lv; // 升级奖励更高
+        explode(p.x+p.w/2, p.y+10, "#5afff0", 20, 5);
+      } else {
+        p.weapon = pu.type;
+      }
     }
   }
 
@@ -517,14 +525,15 @@ function update(){
       if(e.mode==="bomber") e.dead = true;
     }
   }
-  // 自爆兵死亡：掉落一圈炸弹并向四周炸开
+  // 自爆兵死亡：向四周抛出 14 颗红色球弹（带抛物线，落地再炸开）
   for(const e of enemies){
     if(e.dead && e.mode==="bomber" && !e.bombed){
       e.bombed = true;
-      for(let k=0;k<10;k++){
-        const a = k*Math.PI/5 + Math.random()*0.2;
-        ebullets.push({x:e.x+e.w/2, y:e.y+e.h/2, w:9, h:9, r:6,
-                       vx:Math.cos(a)*3.2, vy:Math.sin(a)*3.2, life:110});
+      for(let k=0;k<14;k++){
+        const a = -Math.PI/2 + (k-6.5)*0.24 + Math.random()*0.12; // 以上半圈为主抛出
+        const v = 2.6 + Math.random()*2.2;
+        ebullets.push({x:e.x+e.w/2, y:e.y+e.h/2, w:12, h:12, r:6.5,
+                       vx:Math.cos(a)*v, vy:Math.sin(a)*v - 3.5, g:true, life:220});
       }
       explode(e.x+e.w/2, e.y+e.h/2, "#ff5b3d", 24, 5.5);
       sfx(120,.4,"sawtooth",.12,-60); shake = Math.max(shake,6);
@@ -575,8 +584,8 @@ function update(){
       // 追踪修正：锁定目标仍存活时，每帧重新解算水平速度指向目标当前位置
       if(bl.tref && !bl.tref.dead){
         bl.T = Math.max(6, bl.T - 1);
-        bl.vx = ((bl.tref.x + bl.tref.w/2) - (bl.x+6)) / bl.T;
-        if(Math.hypot((bl.tref.x+bl.tref.w/2)-(bl.x+6), (bl.tref.y+bl.tref.h/2)-(bl.y+6)) < 26) bl.life = 1; // 近距引爆
+        bl.vx = ((bl.tref.x + bl.tref.w/2) - (bl.x+7)) / bl.T;
+        if(Math.hypot((bl.tref.x+bl.tref.w/2)-(bl.x+7), (bl.tref.y+bl.tref.h/2)-(bl.y+7)) < 28) bl.life = 1; // 近距引爆
       }
       bl.vy += BOMB_G; bl.x += bl.vx; bl.y += bl.vy; bl.life--;
       if(bl.life%4===0) particles.push({x:bl.x+4, y:bl.y+4, vx:-bl.vx*0.1, vy:-0.3, life:14, color:"#9aa0a8"});
@@ -585,25 +594,25 @@ function update(){
       if(!boom) for(const e of enemies){ if(!e.dead && aabb(bl,e)){ boom=true; break; } }
       if(boom){
         bl.life = 0;
-        explode(bl.x+6, bl.y+6, "#ffb347", 30, 6);
-        explode(bl.x+6, bl.y+6, "#ff5b3d", 20, 4);
+        explode(bl.x+7, bl.y+7, "#ffb347", 30, 6);
+        explode(bl.x+7, bl.y+7, "#ff5b3d", 20, 4);
         shake = Math.max(shake, 10);
         sfx(90,.5,"sawtooth",.14,-40);
         for(const e of enemies){
           if(e.dead) continue;
-          const d = Math.hypot((e.x+e.w/2)-(bl.x+6), (e.y+e.h/2)-(bl.y+6));
+          const d = Math.hypot((e.x+e.w/2)-(bl.x+7), (e.y+e.h/2)-(bl.y+7));
           if(d<85) damageEnemy(e, 3);
         }
         if(boss.active && !boss.dead){
           for(const c of boss.cannons){
             if(c.dead) continue;
-            if(Math.hypot((c.x+c.w/2)-(bl.x+6), (c.y+c.h/2)-(bl.y+6))<90){
+            if(Math.hypot((c.x+c.w/2)-(bl.x+7), (c.y+c.h/2)-(bl.y+7))<90){
               c.hp-=3; explode(c.x+c.w/2,c.y+c.h/2,"#ff9b4d",16,5);
               if(c.hp<=0){ c.dead=true; score+=800; shake=10; S.hitE(); }
             }
           }
           const core = boss.core;
-          if(!core.dead && Math.hypot((core.x+core.w/2)-(bl.x+6), (core.y+core.h/2)-(bl.y+6))<95){
+          if(!core.dead && Math.hypot((core.x+core.w/2)-(bl.x+7), (core.y+core.h/2)-(bl.y+7))<95){
             core.hp-=3;
             if(core.hp<=0) killCore();
           }
@@ -687,6 +696,22 @@ function update(){
   bullets = bullets.filter(b=>b.life>0 && b.x>cam-40 && b.x<cam+W+40 && b.y>-40 && b.y<H+40);
 
   for(const bl of ebullets){
+    // 自爆兵抛物线炸弹：受重力下坠，落地/超时炸开（近身范围伤害）
+    if(bl.g){
+      bl.vy += 0.28; bl.x += bl.vx; bl.y += bl.vy; bl.life--;
+      const gy = groundYAt(bl.x);
+      if(bl.y + bl.r >= (gy===Infinity ? H+60 : gy) || bl.life<=0){
+        bl.life = 0;
+        explode(bl.x, bl.y, "#ff5b3d", 14, 4.5);
+        explode(bl.x, bl.y, "#ffb347", 8, 3);
+        sfx(150,.22,"sawtooth",.07,-90);
+        if(p.inv<=0 && !p.dead && Math.hypot((p.x+p.w/2)-bl.x, (p.y+p.h/2)-bl.y) < 52) hurtPlayer();
+      } else if(p.inv<=0 && !p.dead && aabb(hitbox(),bl)){
+        bl.life = 0; hurtPlayer();
+        explode(bl.x, bl.y, "#ff5b3d", 14, 4.5);
+      }
+      continue;
+    }
     bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
     if(p.inv<=0 && !p.dead && aabb(hitbox(),bl)){ bl.life=0; hurtPlayer(); }
   }
@@ -715,42 +740,46 @@ function tryShoot(force){
   const mvx = Math.cos(p.aimAng), mvy = Math.sin(p.aimAng); // 局部坐标：+x 为面朝方向
   const bx = p.x + p.w/2 + (p.crouch ? 0 : p.face*mvx*8);
   const by = p.crouch ? p.y+28 : p.y+12+mvy*8;
-  const mk = (vx,vy,dmg=1)=>bullets.push({x:bx,y:by,w:6,h:6,vx,vy,life:70,dmg});
+  const mk = (vx,vy,dmg=1,yoff=0)=>bullets.push({x:bx,y:by+yoff,w:6,h:6,vx,vy,life:70,dmg});
   // 斜上/正上瞄准增强：伤害 2、弹速更快
   const boost = p.aimAng !== 0 ? 1.15 : 1;
   const dmg   = p.aimAng !== 0 ? 2 : 1;
-  if(p.weapon==="B"){ // 炸弹：自动锁定面前最近的敌人，投出抛物线炸弹
-    p.fireCd = 32;
-    let best=null, bd=1e9;
-    for(const e of enemies){
-      if(e.dead) continue;
-      const dx = (e.x+e.w/2) - bx;
-      if(Math.sign(dx) !== p.face) continue;
-      const d = Math.abs(dx);
-      if(d<bd){ bd=d; best=e; }
-    }
-    if(best && bd<780){
-      // 弹道解算：按飞行时间 T 反解初速度，使炸弹恰好落到目标身上
-      const tx=best.x+best.w/2, ty=best.y+best.h/2;
-      const T = Math.max(26, bd/7);
-      bullets.push({bomb:true, x:bx, y:by, w:12, h:12, tref:best, T:T,
-                    vx:(tx-bx)/T, vy:(ty-by-0.5*BOMB_G*T*T)/T, life:150});
-    } else { // 无目标：常规前抛
-      bullets.push({bomb:true, x:bx, y:by, w:12, h:12, vx:p.face*6, vy:-7, life:150});
+  const lv = p.wlv && p.wlv[p.weapon] || 0; // 武器等级（吃同类包升级，最高 2）
+  if(p.weapon==="B"){ // 炸弹：自动锁定面前最近的敌人，投出抛物线炸弹；Lv+ 双弹齐投
+    p.fireCd = lv>=1 ? 40 : 32;
+    // 收集面朝方向按距离排序的敌人
+    const cands = enemies.filter(e=>!e.dead && Math.sign((e.x+e.w/2)-bx)===p.face)
+                         .sort((a,b)=>Math.abs(a.x-bx)-Math.abs(b.x-bx));
+    const throwBomb = (tgt, extraT)=>{
+      let vx, vy, T;
+      if(tgt){
+        const tx=tgt.x+tgt.w/2, ty=tgt.y+tgt.h/2;
+        T = Math.max(26, Math.abs(tx-bx)/7) + extraT;
+        vx=(tx-bx)/T; vy=(ty-by-0.5*BOMB_G*T*T)/T;
+      } else { vx=p.face*6; vy=-7; T=90; }
+      bullets.push({bomb:true, x:bx, y:by, w:14, h:14, tref:tgt, T, vx, vy, life:150});
+    };
+    throwBomb(cands[0]||null, 0);
+    if(lv>=1){
+      // 第二颗：锁定次近目标；无次近目标则错开时间砸向同一目标
+      throwBomb(cands[1]||cands[0]||null, cands[1] ? 0 : 10);
     }
     sfx(300,.2,"triangle",.08,-160);
-  } else if(p.weapon==="L"){ // 镭射枪：贯穿光束，直扫到屏幕边缘
+  } else if(p.weapon==="L"){ // 镭射枪：贯穿光束；Lv+ 光束变粗、威力提升
     p.fireCd = 45;
-    bullets.push({beam:true, x:bx, y:by, dx:p.face*mvx, dy:mvy, life:14, hit:new Set()});
+    bullets.push({beam:true, x:bx, y:by, dx:p.face*mvx, dy:mvy, life:14, hit:new Set(),
+                  bw: 7 + lv*5, bd: 3 + lv});
     sfx(1200,.25,"sawtooth",.09,-900);
-  } else if(p.weapon==="M"){ // 机枪：高射速连发
+  } else if(p.weapon==="M"){ // 机枪：高射速连发；Lv+ 双排子弹
     p.fireCd = 5;
-    mk(p.face*mvx*12*boost, mvy*12*boost, dmg);
+    mk(p.face*mvx*12*boost, mvy*12*boost, dmg, -6);
+    if(lv>=1) mk(p.face*mvx*12*boost, mvy*12*boost, dmg, 6);
     S.shoot();
-  } else if(p.weapon==="S"){ // 散弹枪：三向扇形
-    p.fireCd = 16;
-    for(let k=-1;k<=1;k++){
-      const ang = p.aimAng + k*0.38;
+  } else if(p.weapon==="S"){ // 散弹枪：三向扇形；Lv+ 二次散射成五向
+    p.fireCd = lv>=1 ? 20 : 16;
+    const n = lv>=1 ? 5 : 3;
+    for(let k=0;k<n;k++){
+      const ang = p.aimAng + (k-(n-1)/2)*0.32;
       mk(p.face*Math.cos(ang)*10.5*boost, Math.sin(ang)*10.5*boost, dmg);
     }
     S.shoot();
@@ -1049,24 +1078,26 @@ function drawMedals(){
 }
 function drawBullets(){
   for(const b of bullets){
-    if(b.beam){ // 镭射光束
+    if(b.beam){ // 镭射光束（等级越高越粗）
       const ex=b.x+b.dx*950, ey=b.y+b.dy*950;
+      const bw = b.bw||7;
       ctx.globalAlpha = Math.min(1, b.life/8);
       ctx.lineCap="round";
-      ctx.strokeStyle="#5afff0"; ctx.lineWidth=7;
+      ctx.strokeStyle="#5afff0"; ctx.lineWidth=bw;
       ctx.beginPath(); ctx.moveTo(b.x-cam,b.y); ctx.lineTo(ex-cam,ey); ctx.stroke();
-      ctx.strokeStyle="#eaffff"; ctx.lineWidth=2.5;
+      ctx.strokeStyle="#eaffff"; ctx.lineWidth=Math.max(2, bw*0.4);
       ctx.beginPath(); ctx.moveTo(b.x-cam,b.y); ctx.lineTo(ex-cam,ey); ctx.stroke();
       ctx.globalAlpha=1;
       continue;
     }
-    if(b.bomb){ // 抛物线炸弹：黑铁球 + 引信火花
+    if(b.bomb){ // 抛物线炸弹：大号黑铁球 + 高光 + 引信火花
       const blink = Math.floor(perfNow/80)%2===0;
-      ctx.fillStyle="#1c1c20"; ctx.beginPath(); ctx.arc(b.x+6, b.y+6, 7, 0, 7); ctx.fill();
-      ctx.fillStyle="#3a3a42"; ctx.beginPath(); ctx.arc(b.x+4, b.y+4, 2.5, 0, 7); ctx.fill();
-      ctx.fillStyle="#5a5a62"; ctx.fillRect(b.x+4, b.y-3, 4, 4);
+      ctx.fillStyle="#1c1c20"; ctx.beginPath(); ctx.arc(b.x+7, b.y+7, 11, 0, 7); ctx.fill();
+      ctx.fillStyle="#3c3c46"; ctx.beginPath(); ctx.arc(b.x+4, b.y+4, 5, 0, 7); ctx.fill();
+      ctx.fillStyle="#6a6a75"; ctx.beginPath(); ctx.arc(b.x+3.5, b.y+3.5, 2, 0, 7); ctx.fill();
+      ctx.fillStyle="#5a5a62"; ctx.fillRect(b.x+5, b.y-4, 5, 5);
       ctx.fillStyle = blink ? "#ffe86b" : "#ff5b1a";
-      ctx.fillRect(b.x+5, b.y-6, 3, 3);
+      ctx.beginPath(); ctx.arc(b.x+7.5, b.y-6, 3, 0, 7); ctx.fill();
       continue;
     }
     ctx.fillStyle="#ffe86b";
@@ -1130,7 +1161,9 @@ function drawHUD(){
   }
   if(player.weapon!=="N"){
     const names = {S:"散弹枪", M:"机枪", L:"镭射枪", B:"炸弹"};
-    ctx.fillStyle="#ffd34d"; ctx.fillText(player.weapon + " " + names[player.weapon], 20, 84);
+    const lv = player.wlv[player.weapon]||0;
+    ctx.fillStyle="#ffd34d";
+    ctx.fillText(player.weapon + " " + names[player.weapon] + (lv>=1 ? " Lv"+(lv+1) : ""), 20, 84);
   }
   // 进度条
   ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);

@@ -168,16 +168,20 @@ const checkpoints = [0, 1450, 2650, 3850, 5400, 6600, 7800, 9000, 10200, 11400, 
 const GY = GROUND_Y;
 const triggers = [
   {x:300,  type:"sniper", px:800,  py:undefined},
+  {x:520,  type:"trencher", px:950},
   {x:700,  type:"runner"},
   {x:1000, type:"sniper", px:1430, py:undefined},
   {x:1150, type:"bomber"},
+  {x:1250, type:"camper", px:1800},
   {x:1400, type:"runner"},
   {x:1700, type:"turret", px:2040, py:320, sp:true},
   {x:2100, type:"runner"},
   {x:2350, type:"sniper", px:2650, py:undefined},
+  {x:2500, type:"towerSniper", px:2700},
   {x:2700, type:"runner"},
   {x:2850, type:"turret", px:3200, py:290},
   {x:3050, type:"bomber"},
+  {x:3150, type:"trencher", px:3350},
   {x:3200, type:"runner"},
   {x:3450, type:"sniper", px:3550, py:undefined},
   {x:3800, type:"runner"},
@@ -186,6 +190,7 @@ const triggers = [
   {x:4400, type:"runner"},
   {x:4600, type:"sniper", px:4700, py:undefined},
   {x:4800, type:"runner"},
+  {x:4750, type:"camper", px:5000},
   {x:4900, type:"sniper", px:5150, py:330},
   {x:5100, type:"runner"},
   {x:5250, type:"runner"},
@@ -198,15 +203,18 @@ const triggers = [
   {x:6550, type:"runner"},
   {x:6800, type:"sniper", px:6900, py:undefined},
   {x:7000, type:"runner"},
+  {x:7100, type:"trencher", px:7250},
   {x:7200, type:"turret", px:7400, py:280},
   {x:7350, type:"runner"},
   {x:7600, type:"runner"},
   {x:7950, type:"sniper", px:8100, py:undefined},
   {x:8050, type:"turret", px:8200, py:290},
   {x:8250, type:"runner"},
+  {x:8300, type:"camper", px:8450},
   {x:8500, type:"runner"},
   {x:8650, type:"bomber"},
   {x:8750, type:"turret", px:9000, py:280, sp:true},
+  {x:8850, type:"towerSniper", px:9100},
   {x:8950, type:"runner"},
   {x:9150, type:"sniper", px:9300, py:undefined},
   {x:9350, type:"runner"},
@@ -224,18 +232,22 @@ const triggers = [
   {x:11500, type:"runner"},
   {x:11700, type:"sniper", px:11850, py:undefined},
   {x:11850, type:"runner"},
+  {x:11950, type:"trencher", px:12050},
   {x:12050, type:"turret", px:12200, py:280, sp:true},
   {x:12250, type:"runner"},
   {x:12450, type:"runner"},
   {x:12600, type:"sniper", px:12700, py:undefined},
+  {x:12650, type:"camper", px:12650},
   {x:12750, type:"turret", px:13000, py:290},
   {x:12850, type:"bomber"},
   {x:12950, type:"runner"},
+  {x:13150, type:"towerSniper", px:13350},
   {x:13200, type:"runner"},
   {x:13350, type:"sniper", px:13450, py:320},
   {x:13550, type:"turret", px:13800, py:280, sp:true},
   {x:13750, type:"runner"},
   {x:14000, type:"runner"},
+  {x:14050, type:"trencher", px:14550},
   {x:14150, type:"turret", px:14600, py:290},
   {x:14350, type:"runner"},
   {x:14450, type:"bomber"},
@@ -265,6 +277,11 @@ const medals = [
   {x:13460, y:320, taken:false, bob:0},
 ];
 
+// 木箱工事（可破坏路障：挡人挡子弹，打碎得分；部分成堆摆放）
+let crates = [
+  1000, 1052, 2050, 3050, 4300, 4352, 5900, 7550, 9150, 11000, 12150, 14000, 14052
+].map(x => ({x, y:groundYAt(x)-44, w:48, h:44, hp:8, maxHp:8, dead:false, flash:0}));
+
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
@@ -293,6 +310,7 @@ function startGame(){
   };
   for(const pu of powerups) pu.taken=false;
   for(const m of medals) m.taken=false;
+  for(const c of crates){ c.hp=c.maxHp; c.dead=false; c.flash=0; }
   resetPlayer(60);
   state="play"; stateTimer=0; shake=0;
 }
@@ -336,13 +354,22 @@ function update(){
   p.x += p.vx; p.y += p.vy;
   p.x = Math.max(0, Math.min(p.x, LEVEL_W - p.w));
 
+  // 木箱：水平阻挡（跳到箱顶上方则不阻挡，可站上去当掩体）
+  for(const c of crates){
+    if(c.dead) continue;
+    if(aabb(p,c) && p.y + p.h > c.y + 8){
+      p.x = (p.x + p.w/2 < c.x + c.w/2) ? c.x - p.w : c.x + c.w;
+    }
+  }
+
   // 平台 / 坡面地形碰撞（扫掠式：上一帧脚在表面上方、这一帧越过即落地；走路时贴合坡面）
   let landed = false;
   const feetPrev = p.y + p.h - p.vy;
   // 脚部碰撞区间：脚的任何一部分踩到支撑面都算站立（放宽接触判定）
   const footL = p.x + 2, footR = p.x + p.w - 2;
   if(p.vy >= 0){
-    for(const pl of platforms){
+    for(const pl of platforms.concat(crates)){
+      if(pl.dead) continue;
       if(footR > pl.x && footL < pl.x + pl.w &&
          feetPrev <= pl.y + 2 && p.y + p.h >= pl.y){
         p.y = pl.y - p.h; p.vy = 0; landed = true; break;
@@ -426,6 +453,9 @@ function update(){
         const gy = groundYAt(t.px);
         enemies.push(makeTurret(t.px, gy<Infinity ? gy-40 : 300, t.sp));
       }
+      if(t.type==="trencher" || t.type==="towerSniper" || t.type==="camper"){
+        enemies.push(makeFort(t.px, t.type==="towerSniper" ? "tower" : t.type));
+      }
     }
   }
   // 自动补兵
@@ -461,6 +491,41 @@ function update(){
           }
         }
       }
+    } else if(e.kind==="fort"){ // 工事类：战壕兵 / 高塔狙击 / 草丛伏兵
+      e.t++;
+      if(e.mode==="trencher"){
+        // 周期性抬头射击再蹲下；蹲下时不可被击中
+        e.cd--;
+        if(e.cd<=0){ e.up = 120; e.cd = 250 + Math.random()*60; }
+        if(e.up>0){
+          e.up--;
+          if(e.up===105 || e.up===65){
+            const dx=(p.x+p.w/2)-(e.x+26), dy=chestY()-(e.y-24), d=Math.hypot(dx,dy)||1;
+            ebullets.push({x:e.x+26, y:e.y-20, w:6, h:6, vx:dx/d*4.6, vy:dy/d*4.6, life:160});
+            S.shoot();
+          }
+        }
+      } else if(e.mode==="tower"){
+        // 高处狙击：射程更远、弹速更快
+        e.cd--;
+        if(!e.dead && e.cd<=0 && Math.abs(p.x-e.x)<720){
+          e.cd = 140;
+          const dx=(p.x+p.w/2)-(e.x+23), dy=chestY()-(e.y-170), d=Math.hypot(dx,dy)||1;
+          ebullets.push({x:e.x+23, y:e.y-170, w:6, h:6, vx:dx/d*5.4, vy:dy/d*5.4, life:200});
+          S.shoot();
+        }
+      } else { // camper：藏在草丛，玩家靠近才现身开火
+        if(!e.revealed && Math.abs((p.x+p.w/2)-(e.x+20))<240){ e.revealed = true; e.cd = 30; }
+        if(e.revealed){
+          e.cd--;
+          if(e.cd<=0){
+            e.cd = 110;
+            const dx=(p.x+p.w/2)-(e.x+20), dy=chestY()-(e.y-30), d=Math.hypot(dx,dy)||1;
+            ebullets.push({x:e.x+20, y:e.y-30, w:6, h:6, vx:dx/d*4.8, vy:dy/d*4.8, life:160});
+            S.shoot();
+          }
+        }
+      }
     } else { // soldier
       if(e.mode==="sniper"){
         // 狙击手不移动，但同样受重力，确保始终贴在支撑面上
@@ -468,7 +533,8 @@ function update(){
         e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
         if(e.vy >= 0){
           const footL = e.x + 2, footR = e.x + e.w - 2;
-          for(const pl of platforms){
+          for(const pl of platforms.concat(crates)){
+            if(pl.dead) continue;
             if(footR > pl.x && footL < pl.x + pl.w &&
                feetPrevS <= pl.y + 2 && e.y + e.h >= pl.y){ e.y = pl.y - e.h; e.vy = 0; break; }
           }
@@ -490,13 +556,21 @@ function update(){
         const dir = p.x > e.x ? 1 : -1;
         e.vx = dir * (e.mode==="bomber" ? 2.9 : 2.1);
         e.x += e.vx;
+        // 木箱阻挡冲锋兵：被挡时尝试跳过去
+        for(const c of crates){
+          if(!c.dead && aabb(e,c) && e.y + e.h > c.y + 8){
+            e.x = e.vx > 0 ? c.x - e.w : c.x + c.w;
+            if(e.onGroundPrev && Math.random() < 0.25) e.vy = -9;
+          }
+        }
         const feetPrevE = e.y + e.h;
         e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
         // 扫掠式落地：平台或地面，脚部任一部分接触即站立
         if(e.vy >= 0){
           const footL = e.x + 2, footR = e.x + e.w - 2;
           let ok = false;
-          for(const pl of platforms){
+          for(const pl of platforms.concat(crates)){
+            if(pl.dead) continue;
             if(footR > pl.x && footL < pl.x + pl.w &&
                feetPrevE <= pl.y + 2 && e.y + e.h >= pl.y){
               e.y = pl.y - e.h; e.vy = 0; ok = true; break;
@@ -520,7 +594,7 @@ function update(){
       }
     }
     // 敌人撞到玩家（自爆兵撞击即自爆）
-    if(!e.dead && !p.dead && p.inv<=0 && aabb(hitbox(),e)){
+    if(!e.dead && !p.dead && p.inv<=0 && aabb(hitbox(),ebox(e))){
       hurtPlayer();
       if(e.mode==="bomber") e.dead = true;
     }
@@ -632,11 +706,11 @@ function update(){
         return false;
       };
       for(const e of enemies){
-        if(!e.dead && !bl.hit.has(e) && hitTest(e)){
+        if(!e.dead && !bl.hit.has(e) && hitTest(ebox(e))){
           bl.hit.add(e); e.hp-=3;
           if(e.hp<=0){
             e.dead=true; killCount++;
-            score += (e.kind==="turret")?500:(e.mode==="sniper"?200:100);
+            score += scoreFor(e);
             explode(e.x+e.w/2,e.y+e.h/2,"#ff9b4d",14,4); S.hitE();
           }
         }
@@ -661,13 +735,25 @@ function update(){
       continue;
     }
     bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
+    // 打木箱（可破坏，打碎得分）
+    for(const c of crates){
+      if(bl.life>0 && !c.dead && aabb(bl,c)){
+        bl.life=0; c.hp--; c.flash=6; explode(bl.x,bl.y,"#c9a17a",4,2); S.hitE();
+        if(c.hp<=0){
+          c.dead=true; score+=50;
+          explode(c.x+c.w/2, c.y+c.h/2, "#8a6a3a", 16, 4);
+          sfx(110,.3,"sawtooth",.1,-60);
+        }
+        break;
+      }
+    }
     // 打敌人
     for(const e of enemies){
-      if(!e.dead && aabb(bl,e)){
+      if(!e.dead && aabb(bl,ebox(e))){
         bl.life=0; e.hp-=bl.dmg||1; explode(bl.x,bl.y,"#fff3a0",5,2.5);
         if(e.hp<=0){
           e.dead=true; killCount++;
-          score += (e.kind==="turret")?500:(e.mode==="sniper"?200:100);
+          score += scoreFor(e);
           explode(e.x+e.w/2,e.y+e.h/2,"#ff9b4d",14,4); S.hitE();
         }
         break;
@@ -713,13 +799,21 @@ function update(){
       continue;
     }
     bl.x+=bl.vx; bl.y+=bl.vy; bl.life--;
-    if(p.inv<=0 && !p.dead && aabb(hitbox(),bl)){ bl.life=0; hurtPlayer(); }
+    // 敌弹被木箱挡下（木箱=玩家的掩体）
+    for(const c of crates){
+      if(bl.life>0 && !c.dead && aabb(bl,c)){
+        bl.life=0; c.flash=6; explode(bl.x,bl.y,"#c9a17a",4,2);
+        break;
+      }
+    }
+    if(bl.life>0 && p.inv<=0 && !p.dead && aabb(hitbox(),bl)){ bl.life=0; hurtPlayer(); }
   }
   ebullets = ebullets.filter(b=>b.life>0);
 
   // 粒子
   for(const q of particles){ q.x+=q.vx; q.y+=q.vy; q.vy+=0.25; q.life--; }
   particles = particles.filter(q=>q.life>0);
+  for(const c of crates) if(c.flash>0) c.flash--;
 }
 
 function spawnRunner(fromBoss){
@@ -730,6 +824,26 @@ function spawnRunner(fromBoss){
 }
 function makeSoldier(x,y,mode){ return {kind:"soldier",mode,x,y,w:24,h:40,vx:0,vy:0,hp:1,dead:false,cd:60+Math.random()*80,onGroundPrev:false,animT:Math.random()*100}; }
 function makeTurret(x,y,sp){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0,sp:!!sp}; }
+// 工事类敌人：trencher 战壕兵 / tower 高塔狙击 / camper 草丛伏兵（y 记录地表高度）
+function makeFort(px, mode){
+  const gy = groundYAt(px);
+  return {kind:"fort", mode, x:px, y:(gy<Infinity?gy:GROUND_Y),
+          w: mode==="tower"?46 : (mode==="trencher"?52:40), h:0,
+          hp: mode==="tower"?2:1, dead:false,
+          cd: 70+Math.random()*70, up:0, revealed:false, t:0, animT:0};
+}
+// 工事敌人的受击盒（隐藏时为空盒=不可被打）
+function ebox(e){
+  if(e.kind!=="fort") return e;
+  if(e.mode==="tower")    return {x:e.x+8,  y:e.y-184, w:30, h:34};
+  if(e.mode==="trencher") return e.up>0 ? {x:e.x+12, y:e.y-30, w:28, h:30} : {x:-9999,y:-9999,w:0,h:0};
+  return e.revealed ? {x:e.x+6, y:e.y-38, w:28, h:38} : {x:-9999,y:-9999,w:0,h:0}; // camper
+}
+function scoreFor(e){
+  if(e.kind==="turret") return 500;
+  if(e.kind==="fort")   return e.mode==="tower"?400 : e.mode==="camper"?250 : 150;
+  return e.mode==="sniper" ? 200 : 100;
+}
 
 const BOMB_G = 0.35; // 炸弹抛物线重力
 // 统一开火入口：force=true 时无视冷却（用于 ↑+方向 一键斜射）
@@ -794,7 +908,7 @@ function damageEnemy(e, dmg){
   e.hp -= dmg;
   if(e.hp<=0 && !e.dead){
     e.dead=true; killCount++;
-    score += (e.kind==="turret")?500:(e.mode==="sniper"?200:100);
+    score += scoreFor(e);
     explode(e.x+e.w/2,e.y+e.h/2,"#ff9b4d",14,4); S.hitE();
   }
 }
@@ -933,6 +1047,25 @@ function drawTerrain(){
     ctx.fillStyle="#3e2f1f"; ctx.fillRect(pl.x-cam, pl.y+pl.h-4, pl.w, 4);
   }
 }
+function drawCrates(){
+  for(const c of crates){
+    if(c.dead || c.x+c.w<cam || c.x>cam+W) continue;
+    const x=c.x-cam, y=c.y;
+    ctx.fillStyle = c.flash>0 ? "#c9a17a" : "#8a6a3a";
+    ctx.fillRect(x, y, c.w, c.h);
+    ctx.fillStyle = c.flash>0 ? "#e0c090" : "#a5824c";
+    ctx.fillRect(x+3, y+3, c.w-6, c.h-6);
+    // 木板纹 + 钉子
+    ctx.strokeStyle="#6b4e28"; ctx.lineWidth=2;
+    ctx.strokeRect(x+5.5, y+5.5, c.w-11, c.h-11);
+    ctx.beginPath();
+    ctx.moveTo(x+6, y+c.h/2); ctx.lineTo(x+c.w-6, y+c.h/2);
+    ctx.stroke();
+    ctx.fillStyle="#4a3618";
+    ctx.fillRect(x+3,y+3,3,3); ctx.fillRect(x+c.w-6,y+3,3,3);
+    ctx.fillRect(x+3,y+c.h-6,3,3); ctx.fillRect(x+c.w-6,y+c.h-6,3,3);
+  }
+}
 function drawPlayer(){
   const p = player;
   if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return; // 受伤闪烁
@@ -982,6 +1115,70 @@ function drawPlayerCrouch(){
 }
 function drawSoldier(e){
   const x=e.x-cam, y=e.y, t=(e.animT+=0.3);
+  // ----- 工事类 -----
+  if(e.kind==="fort"){
+    if(e.mode==="trencher"){
+      // 战壕：深沟 + 沙袋垒边
+      ctx.fillStyle="#1a2416"; ctx.fillRect(x, y-4, e.w, 16);           // 沟体
+      ctx.fillStyle="#2c3626"; ctx.fillRect(x+4, y-2, e.w-8, 12);       // 沟内阴影
+      ctx.fillStyle="#6b6248";
+      for(let sx=0; sx<e.w; sx+=16){ ctx.fillRect(x+sx, y-8, 14, 8); }  // 沙袋
+      ctx.fillStyle="#7a7054";
+      for(let sx=0; sx<e.w; sx+=16){ ctx.fillRect(x+sx, y-8, 14, 3); }
+      if(e.up>0){
+        // 士兵抬头（前 20 帧升起、后 20 帧蹲回）
+        const rise = Math.min(1, Math.min(e.up, 120-e.up)/20);
+        const sy = y - rise*26;
+        ctx.fillStyle="#c9a17a"; ctx.fillRect(x+18, sy, 12, 10);        // 头
+        ctx.fillStyle="#3d4a26"; ctx.fillRect(x+16, sy-4, 16, 5);       // 头盔
+        ctx.fillStyle="#5a6a3a"; ctx.fillRect(x+16, sy+10, 16, 10);     // 肩
+        ctx.fillStyle="#333";    ctx.fillRect(x+28, sy+8, 18, 3);       // 枪
+      }
+      return;
+    }
+    if(e.mode==="tower"){
+      // 高塔：木架 + 顶部平台
+      ctx.fillStyle="#5b4630";
+      ctx.fillRect(x+4, y-150, 7, 150); ctx.fillRect(x+e.w-11, y-150, 7, 150);  // 双腿
+      ctx.strokeStyle="#5b4630"; ctx.lineWidth=5;
+      ctx.beginPath();
+      ctx.moveTo(x+6, y-20); ctx.lineTo(x+e.w-8, y-90);
+      ctx.moveTo(x+e.w-8, y-20); ctx.lineTo(x+6, y-90);
+      ctx.stroke();
+      ctx.fillStyle="#7d5f3f"; ctx.fillRect(x-4, y-154, e.w+8, 10);     // 平台
+      ctx.fillStyle="#3e2f1f"; ctx.fillRect(x-4, y-146, e.w+8, 4);
+      // 塔顶狙击手
+      const dir = (player.x > e.x) ? 1 : -1;
+      ctx.save(); ctx.translate(x+e.w/2, y-154); ctx.scale(dir,1);
+      ctx.fillStyle="#5a6a3a"; ctx.fillRect(-8,-22,16,16);
+      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5,-30,10,8);
+      ctx.fillStyle="#3d4a26"; ctx.fillRect(-7,-34,14,4);
+      ctx.fillStyle="#333";    ctx.fillRect(6,-26,20,3);
+      if(e.cd>128 && e.cd<136){ ctx.fillStyle="#ffe86b"; ctx.fillRect(26,-27,6,5); } // 枪口焰
+      ctx.restore();
+      return;
+    }
+    // camper：草丛伏兵
+    ctx.fillStyle="#2e5a2a";
+    for(let b=0;b<6;b++){
+      const bx = x + b*7 + (b%2)*3;
+      ctx.beginPath();
+      ctx.moveTo(bx, y); ctx.quadraticCurveTo(bx+3, y-16-(b%3)*4, bx+6, y);
+      ctx.closePath(); ctx.fill();
+    }
+    if(e.revealed){
+      // 现身：单膝跪地射击姿态
+      const dir = (player.x > e.x) ? 1 : -1;
+      ctx.save(); ctx.translate(x+e.w/2, y); ctx.scale(dir,1);
+      ctx.fillStyle="#5a6a3a"; ctx.fillRect(-9,-16,18,14);              // 躯干
+      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5,-26,10,9);               // 头
+      ctx.fillStyle="#3d4a26"; ctx.fillRect(-7,-30,14,4);               // 头盔
+      ctx.fillStyle="#3d4a26"; ctx.fillRect(-9,-2,8,4);                 // 跪腿
+      ctx.fillStyle="#333";    ctx.fillRect(6,-14,20,3);                // 枪
+      ctx.restore();
+    }
+    return;
+  }
   if(e.kind==="turret"){
     // 特殊炮台（青色，温和版）与普通炮台（灰红，扇形散射）
     ctx.fillStyle = e.sp ? "#1f6f6f" : "#3a3f4a"; ctx.fillRect(x, y+14, e.w, e.h-14);
@@ -1194,6 +1391,7 @@ function render(){
     return;
   }
   drawTerrain();
+  drawCrates();
   drawPowerups();
   drawMedals();
   for(const e of enemies) drawSoldier(e);

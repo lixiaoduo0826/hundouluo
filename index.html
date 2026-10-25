@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; ↑+方向 一键斜射 &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃(空中更快更远) &nbsp;|&nbsp; ↓ 蹲下 / 空中朝下瞄准 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; 空中 ↓+1 朝下射击 &nbsp;|&nbsp; ↑+方向 一键斜射 &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -56,11 +56,13 @@ const S = {
   clear : () => { [523,659,784,1046].forEach((f,i)=>setTimeout(()=>sfx(f,.25,"square",.08),i*180)); },
 };
 
-// ---------- BGM（芯片音原创循环，致敬 8-bit 军旅英雄风）----------
-// lead/bass 用 MIDI 音高数字，0 = 休止符
+// ---------- BGM ----------
+// 若目录下存在 bgm.mp3（用户自备音频文件），自动循环播放；否则回退到芯片音原创循环
+const userBgm = (typeof Audio !== "undefined") ? new Audio("bgm.mp3") : null;
+if(userBgm){ userBgm.loop = true; userBgm.volume = 0.45; }
 const midi = n => 440*Math.pow(2,(n-69)/12);
 const BGM = {
-  on:false, muted:false, step:0, timer:null,
+  on:false, muted:false, step:0, timer:null, usingFile:false,
   lead: [76,0,76,0,79,0,81,0,  83,0,81,79,76,0,74,76,   // 主题句
          79,0,79,0,81,79,76,0,  74,0,76,0,71,0,0,0,     // 答句
          76,0,76,0,79,0,81,0,  83,0,86,83,81,0,79,81,   // 推进句
@@ -72,9 +74,19 @@ const BGM = {
   start(){
     if(this.timer || this.on) return;
     this.on = true;
-    this.timer = setInterval(()=>this.tick(), 168); // ~178 BPM 八分音符
+    // 优先尝试用户自备的 bgm.mp3；加载/播放失败则回退芯片音
+    if(userBgm){
+      userBgm.muted = this.muted;
+      const p = userBgm.play();
+      if(p && p.then) p.then(()=>{ this.usingFile = true; })
+                      .catch(()=>{ this.usingFile = false;
+                        if(!this.timer) this.timer = setInterval(()=>this.tick(), 168); });
+    } else {
+      this.timer = setInterval(()=>this.tick(), 168); // ~178 BPM 八分音符
+    }
   },
-  stop(){ this.on=false; if(this.timer){ clearInterval(this.timer); this.timer=null; } },
+  stop(){ this.on=false; if(this.timer){ clearInterval(this.timer); this.timer=null; }
+          if(userBgm){ userBgm.pause(); try{ userBgm.currentTime = 0; }catch(e){} } },
   tick(){
     if(!this.on || this.muted) { this.step++; return; }
     const i = this.step % 64;
@@ -99,7 +111,7 @@ window.addEventListener("keydown", e => {
   // 后按方向键（↑ 已按住）同样触发一键斜射
   if((e.code==="ArrowLeft" || e.code==="ArrowRight") && !e.repeat && kUp()) diagQuickShot();
   if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
-  if(e.code==="KeyM"){ BGM.muted = !BGM.muted; }  // M 键 BGM 静音开关
+  if(e.code==="KeyM"){ BGM.muted = !BGM.muted; if(userBgm) userBgm.muted = BGM.muted; }  // M 键 BGM 静音开关
   if(e.code === "Enter") gameState.onEnter();
   ac(); // 首次按键激活音频
 });
@@ -404,17 +416,18 @@ function update(){
   const p = player;
   p.animT++;
   if(p.inv>0) p.inv--;
-  const spd = 3.2;
+  const spd = 3.2, airSpd = 5.6; // 空中水平速度更快 → 跳得远
   // 蹲下：仅地面可蹲，蹲下时不能移动
   p.crouch = !!(kDown() && p.onGround);
   p.vx = 0;
   if(!p.crouch){
-    if(kLeft()) { p.vx=-spd; p.face=-1; }
-    if(kRight()){ p.vx= spd; p.face= 1; }
+    const sv = p.onGround ? spd : airSpd;
+    if(kLeft()) { p.vx=-sv; p.face=-1; }
+    if(kRight()){ p.vx= sv; p.face= 1; }
   }
-  // 跳跃（允许土狼时间简化：onGround 即可）
-  if(kJumpDown() && p.onGround){ p.vy=-12.6; p.onGround=false; S.jump(); }
-  p.vy += 0.55; if(p.vy>14)p.vy=14;
+  // 跳跃（允许土狼时间简化：onGround 即可）——低跳高 + 大跳距（经典手感）
+  if(kJumpDown() && p.onGround){ p.vy=-11; p.onGround=false; S.jump(); }
+  p.vy += 0.62; if(p.vy>14)p.vy=14;
   p.x += p.vx; p.y += p.vy;
   p.x = Math.max(0, Math.min(p.x, LEVEL_W - p.w));
 
@@ -462,6 +475,8 @@ function update(){
   const aimingUp = p.aimLatch > 0 && !p.crouch;
   const movingH = kLeft() || kRight();
   p.aimAng = aimingUp ? (movingH ? -0.61 : -Math.PI/2) : 0;
+  // 空中按住 ↓：枪口朝正下方（可对脚下开火，带朝下瞄准动画）
+  if(!p.onGround && kDown()) p.aimAng = Math.PI/2;
 
   // 射击（数字 1 键；一键斜射走 tryShoot 强制通道）
   if(p.fireCd>0) p.fireCd--;
@@ -919,8 +934,9 @@ function tryShoot(force){
   if(!p || p.dead) return;
   if(p.fireCd>0 && !force) return;
   const mvx = Math.cos(p.aimAng), mvy = Math.sin(p.aimAng); // 局部坐标：+x 为面朝方向
+  const downAim = p.aimAng === Math.PI/2;                   // 空中朝下射击
   const bx = p.x + p.w/2 + (p.crouch ? 0 : p.face*mvx*8);
-  const by = p.crouch ? p.y+28 : p.y+12+mvy*8;
+  const by = downAim ? p.y + p.h - 4 : (p.crouch ? p.y+28 : p.y+12+mvy*8);
   const mk = (vx,vy,dmg=1,yoff=0)=>bullets.push({x:bx,y:by+yoff,w:6,h:6,vx,vy,life:70,dmg});
   // 斜上/正上瞄准增强：伤害 2、弹速更快
   const boost = p.aimAng !== 0 ? 1.15 : 1;

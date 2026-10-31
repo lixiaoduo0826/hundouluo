@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑+方向 斜射 &nbsp;|&nbsp; ↑ 拾取同类武器换枪 &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑ 抬枪向上（拾取时按住=换枪） &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -103,24 +103,15 @@ const BGM = {
 const keys = {};
 window.addEventListener("keydown", e => {
   keys[e.code] = true;
-  // ↑（或 W）按下：锁定抬枪状态；↑+方向 按住即"斜上瞄准"，可边走边按 1 连射
+  // ↑（或 W）按下：抬枪朝正上方（可边走边打）
   if(e.code==="ArrowUp" || e.code==="KeyW"){
     if(typeof player!=="undefined" && player) player.aimLatch = 90;
-    lockAimDir();
   }
-  if((e.code==="ArrowLeft" || e.code==="ArrowRight") && !e.repeat && kUp()) lockAimDir();
   if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
   if(e.code==="KeyM"){ BGM.muted = !BGM.muted; if(userBgm) userBgm.muted = BGM.muted; }  // M 键 BGM 静音开关
   if(e.code === "Enter") gameState.onEnter();
   ac(); // 首次按键激活音频
 });
-// ↑ + 方向：只锁定/记住斜射朝向，不再自动帮玩家开火（开火完全交给 1 键连射）
-function lockAimDir(){
-  if(!player) return;
-  const dir = kLeft() ? -1 : (kRight() ? 1 : 0);
-  if(dir) player.diagDir = dir;
-  player.aimLatch = 90;
-}
 window.addEventListener("keyup", e => keys[e.code] = false);
 const kLeft  = () => keys["ArrowLeft"];
 const kRight = () => keys["ArrowRight"];
@@ -478,7 +469,7 @@ function resetPlayer(x){
   player = {
     x:x, y:groundYAt(x+11)-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
-    fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, diagDir:0, animT:0, dead:false,
+    fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, animT:0, dead:false,
     slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
     rolling:false, rollAng:0, rollDir:1, landT:0,
   };
@@ -718,26 +709,18 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
-  // 瞄准方向：↑ 按住 = 抬枪，↑+方向 = 斜上 35°（朝该方向走 + 朝该方向斜射，边走边打）
-  // 方向会被"记住"：即使三键同按导致系统丢键，斜射也不会中途变回竖直
+  // 瞄准方向：按住 ↑ = 抬枪朝正上方（蹲下/滑铲时压枪平射）
   if(kUp()) p.aimLatch = 75;
   else if(p.aimLatch > 0) p.aimLatch--;
-  if(kLeft())       p.diagDir = -1;
-  else if(kRight()) p.diagDir =  1;
   p.aimAng = 0;
-  const aimingUp = p.aimLatch > 0 && !kDown();     // 蹲下/滑铲时压枪平射
-  if(aimingUp){
-    if(p.diagDir){ p.aimAng = -0.61; if(p.slideT<=0) p.face = p.diagDir; }
-    else p.aimAng = -Math.PI/2;
-  } else if(p.diagDir){
-    p.diagDir = 0;                    // 瞄准窗口结束后忘掉方向
-  }
+  const aimingUp = p.aimLatch > 0 && !kDown();
+  if(aimingUp) p.aimAng = -Math.PI/2;
   // 空中按住 ↓：枪口朝正下方（可对脚下开火，带朝下瞄准动画）
   if(!p.onGround && kDown() && !aimingUp) p.aimAng = Math.PI/2;
   // 滑铲低姿：枪口压平，贴地横扫（铲中也能开火）
-  if(p.slideT > 0){ p.aimAng = 0; p.diagDir = 0; }
+  if(p.slideT > 0) p.aimAng = 0;
 
-  // 射击（数字 1 键）：站立跑动 / 跳跃 / 滑铲 / 斜上 全部可开火
+  // 射击（数字 1 键）：站立跑动 / 跳跃 / 滑铲 / 抬枪 全部可开火
   if(p.fireCd>0) p.fireCd--;
   if(kShoot()) tryShoot(false);
 
@@ -1435,7 +1418,7 @@ function scoreFor(e){
 }
 
 const BOMB_G = 0.35; // 炸弹抛物线重力
-// 统一开火入口：force=true 时无视冷却（用于 ↑+方向 一键斜射）
+// 统一开火入口：force=true 时无视冷却
 function tryShoot(force){
   const p = player;
   if(!p || p.dead) return;
@@ -1445,7 +1428,7 @@ function tryShoot(force){
   const bx = p.x + p.w/2 + (p.crouch ? 0 : p.face*mvx*8);
   const by = downAim ? p.y + p.h - 4 : (p.crouch ? p.y+28 : p.y+12+mvy*8);
   const mk = (vx,vy,dmg=1,yoff=0)=>bullets.push({x:bx,y:by+yoff,w:6,h:6,vx,vy,life:70,dmg});
-  // 斜上/正上瞄准增强：伤害 2、弹速更快
+  // 抬枪向上瞄准增强：伤害 2、弹速更快
   const boost = p.aimAng !== 0 ? 1.15 : 1;
   const dmg   = p.aimAng !== 0 ? 2 : 1;
   const lv = p.wlv && p.wlv[p.weapon] || 0; // 武器等级 0/1/2 = Lv1/Lv2/Lv3

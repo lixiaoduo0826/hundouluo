@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃(空中更快更远) &nbsp;|&nbsp; ↓ 蹲下 / 空中朝下瞄准 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; 空中 ↓+1 朝下射击 &nbsp;|&nbsp; ↑+方向 一键斜射 &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 1 开火 &nbsp;|&nbsp; 空中 ↓+1 朝下射击 &nbsp;|&nbsp; ↑+方向 一键斜射 &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -117,7 +117,7 @@ window.addEventListener("keydown", e => {
 });
 // 一键斜射：↑ + 方向 同时按下的瞬间自动发射一枚斜上子弹（无需再按 1）
 function diagQuickShot(){
-  if(state!=="play" || !player || player.dead || player.crouch) return;
+  if(state!=="play" || !player || player.dead || player.crouch || player.slideT>0) return;
   const dir = kLeft() ? -1 : (kRight() ? 1 : 0);
   if(!dir) return;
   player.face = dir;
@@ -135,10 +135,9 @@ const kJumpDown = () => keys["Digit2"] || keys["Numpad2"];
 
 // ---------- 关卡数据 ----------
 const GROUND_Y = 460;                 // 地面顶部
-const LEVEL_W = 16000;                // 关卡总长（大扩容版）
-// 地面分段（空隙 = 悬崖水坑，掉下去损命）
-// 地形折线（丛林起伏：小山丘 / 高地 / 下坡，折线之间的断口 = 悬崖水潭）
-const terrainPieces = [
+// ========== 第一关：丛林突击（地形折线 / 平台 / 触发点 / 道具）==========
+const L1_W = 16000;
+const L1_TERRAIN = [
   {pts:[[-100,460],[500,430],[900,395],[1150,410],[1250,440]]},
   {pts:[[1330,440],[1700,405],[2050,380],[2350,420],[2450,435]]},
   {pts:[[2550,435],[2900,400],[3200,415],[3500,390],[3650,440]]},
@@ -168,7 +167,7 @@ function groundYAt(x){
   return Infinity;
 }
 // 悬空平台（配合坡地地形：跨崖桥板 + 山丘踏板 + 道具/勋章高台，均按当地坡面高度布置）
-const platforms = [
+const L1_PLATFORMS = [
   // —— 跨悬崖桥板（12 处断口各一块，帮助越崖）——
   {x:1190,  y:390, w:200, h:16},
   {x:2390,  y:385, w:200, h:16},
@@ -207,10 +206,10 @@ const platforms = [
   {x:13400, y:350, w:160, h:16},   // 勋章3
 ];
 // 检查点（复活位置）
-const checkpoints = [0, 1450, 2650, 3850, 5400, 6600, 7800, 9000, 10200, 11400, 12600, 13800, 15000];
+const L1_CHECKPOINTS = [0, 1450, 2650, 3850, 5400, 6600, 7800, 9000, 10200, 11400, 12600, 13800, 15000];
 // 敌人触发点：相机到达 x 时生成（全程密布：狙击手/冲锋兵/两种炮台交替）
 const GY = GROUND_Y;
-const triggers = [
+const L1_TRIGGERS = [
   {x:300,  type:"sniper", px:800,  py:undefined},
   {x:520,  type:"trencher", px:950},
   {x:700,  type:"runner"},
@@ -300,7 +299,7 @@ const triggers = [
   {x:14900, type:"runner"},
 ];
 // 武器道具（借鉴原版：M 机枪 / S 散弹枪 / L 镭射枪 / B 炸弹），胶囊外观 + 武器剪影
-const powerups = [
+const L1_POWERUPS = [
   {type:"L", x:1560,  y:270, w:34, h:26, taken:false, bob:0},
   {type:"S", x:2800,  y:270, w:34, h:26, taken:false, bob:0},
   {type:"M", x:3990,  y:300, w:34, h:26, taken:false, bob:0},
@@ -315,56 +314,212 @@ const powerups = [
 ];
 
 // 奖励勋章（+1 条命），第一关共 3 枚，藏在高台上
-const medals = [
+const L1_MEDALS = [
   {x:2350,  y:290, taken:false, bob:0},
   {x:9450,  y:320, taken:false, bob:0},
   {x:13460, y:320, taken:false, bob:0},
 ];
 
 // 木箱工事（可破坏路障：挡人挡子弹，打碎得分；部分成堆摆放）
-let crates = [
-  1000, 1052, 2050, 3050, 4300, 4352, 5900, 7550, 9150, 11000, 12150, 14000, 14052
-].map(x => ({x, y:groundYAt(x)-44, w:48, h:44, hp:8, maxHp:8, dead:false, flash:0}));
+const L1_CRATES_X = [1000, 1052, 2050, 3050, 4300, 4352, 5900, 7550, 9150, 11000, 12150, 14000, 14052];
+
+// ============================================================
+// 第二关：敌军基地内部（钢铁走廊 / 能量深坑 / 悬空栈桥 / 反应堆核心）
+// 参考原版第二关"基地突入"：室内金属通道、机械敌人、纵深防御核心
+// ============================================================
+const L2_W = 9400;
+const L2_TERRAIN = [
+  {pts:[[-100,440],[860,440]]},                                    // 入口走廊
+  {pts:[[950,440],[1460,440],[1520,400],[2080,400]]},              // 斜坡抬升到 400
+  {pts:[[2170,400],[2860,400],[2920,440],[3600,440]]},             // 斜坡下降到 440
+  {pts:[[3690,420],[4320,420],[4380,380],[4980,380]]},             // 再抬升到 380
+  {pts:[[5070,380],[5740,380],[5800,420],[6560,420]]},             // 下降到 420
+  {pts:[[6650,420],[7360,420],[7420,440],[9500,440]]},             // 反应堆大厅
+];
+// 栈桥 / 吊台：跨坑格栅 + 高处火力点（高度均按跳跃 138px 可达性校核）
+const L2_PLATFORMS = [
+  {x:850,  y:440, w:120, h:14},    // 跨坑格栅（齐平地面）
+  {x:4960, y:380, w:120, h:14},
+  {x:7350, y:440, w:90,  h:14},
+  {x:1060, y:330, w:150, h:16},    // 高处吊台
+  {x:2380, y:300, w:180, h:16},
+  {x:3020, y:340, w:150, h:16},
+  {x:3900, y:300, w:170, h:16},
+  {x:4600, y:290, w:170, h:16},
+  {x:5330, y:300, w:170, h:16},
+  {x:6020, y:340, w:150, h:16},
+  {x:6800, y:320, w:170, h:16},
+  {x:7720, y:340, w:160, h:16},
+  {x:8320, y:320, w:160, h:16},
+  {x:8820, y:330, w:170, h:16},    // Boss 前射击台
+  {x:1150, y:260, w:130, h:16},    // 武器高台
+  {x:4120, y:240, w:130, h:16},
+  {x:5580, y:250, w:130, h:16},
+  {x:6980, y:270, w:130, h:16},
+  {x:8000, y:290, w:130, h:16},
+];
+const L2_CHECKPOINTS = [0, 1500, 2900, 4600, 5900, 7300];
+const L2_TRIGGERS = [
+  {x:260,  type:"runner"},
+  {x:420,  type:"turret", px:700,  py:400},
+  {x:600,  type:"drone",  px:900,  py:250},
+  {x:700,  type:"sniper", px:1150, py:undefined},
+  {x:880,  type:"runner"},
+  {x:1050, type:"camper", px:1400},
+  {x:1220, type:"runner"},
+  {x:1400, type:"turret", px:1700, py:360, sp:true},
+  {x:1600, type:"bomber"},
+  {x:1750, type:"sniper", px:1950, py:undefined},
+  {x:1900, type:"drone",  px:2150, py:230},
+  {x:2050, type:"runner"},
+  {x:2250, type:"towerSniper", px:2450},
+  {x:2400, type:"turret", px:2600, py:360},
+  {x:2550, type:"runner"},
+  {x:2700, type:"trencher", px:2760},
+  {x:2900, type:"drone",  px:3200, py:260},
+  {x:3050, type:"runner"},
+  {x:3200, type:"turret", px:3450, py:360, sp:true},
+  {x:3350, type:"bomber"},
+  {x:3500, type:"sniper", px:3700, py:undefined},
+  {x:3700, type:"runner"},
+  {x:3850, type:"drone",  px:4050, py:220},
+  {x:4000, type:"turret", px:4230, py:340},
+  {x:4150, type:"runner"},
+  {x:4300, type:"sniper", px:4500, py:undefined},
+  {x:4500, type:"drone",  px:4700, py:210},
+  {x:4700, type:"runner"},
+  {x:4850, type:"turret", px:5100, py:340, sp:true},
+  {x:5000, type:"trencher", px:5200},
+  {x:5200, type:"runner"},
+  {x:5350, type:"drone",  px:5500, py:240},
+  {x:5550, type:"sniper", px:5700, py:undefined},
+  {x:5750, type:"turret", px:6000, py:380},
+  {x:5950, type:"runner"},
+  {x:6100, type:"bomber"},
+  {x:6250, type:"towerSniper", px:6400},
+  {x:6400, type:"runner"},
+  {x:6600, type:"drone",  px:6800, py:230},
+  {x:6750, type:"turret", px:7000, py:380, sp:true},
+  {x:6900, type:"runner"},
+  {x:7050, type:"camper", px:7250},
+  {x:7200, type:"sniper", px:7400, py:undefined},
+  {x:7350, type:"runner"},
+  {x:7500, type:"drone",  px:7800, py:250},
+  {x:7700, type:"turret", px:8000, py:400},
+  {x:7900, type:"runner"},
+];
+const L2_POWERUPS = [
+  {type:"S", x:1215, y:200},
+  {type:"B", x:3090, y:280},
+  {type:"M", x:4185, y:180},
+  {type:"L", x:5645, y:190},
+  {type:"B", x:7045, y:210},
+  {type:"S", x:8065, y:230},
+  {type:"M", x:4385, y:330},
+];
+const L2_MEDALS = [
+  {x:2440, y:255},
+  {x:6860, y:265},
+];
+const L2_CRATES_X = [1350, 2680, 2732, 4300, 6080, 7280];
+
+// ---------- 当前关卡装配 ----------
+let LEVEL_IDX = 1;
+let LEVEL_W = L1_W;
+let terrainPieces = L1_TERRAIN;
+let platforms = L1_PLATFORMS;
+let checkpoints = L1_CHECKPOINTS;
+let triggers = L1_TRIGGERS;
+let powerups = L1_POWERUPS.map(o => ({...o, taken:false, bob:0}));
+let medals = L1_MEDALS.map(o => ({...o, taken:false, bob:0}));
+function buildCrates(xs){
+  return xs.map(x => ({x, y:groundYAt(x)-44, w:48, h:44, hp:8, maxHp:8, dead:false, flash:0}));
+}
+let crates = buildCrates(L1_CRATES_X);
+// 切换关卡的整套地形 / 平台 / 触发点 / 道具 / 木箱
+function loadLevel(n){
+  LEVEL_IDX = n;
+  if(n === 1){
+    LEVEL_W = L1_W; terrainPieces = L1_TERRAIN; platforms = L1_PLATFORMS;
+    checkpoints = L1_CHECKPOINTS; triggers = L1_TRIGGERS;
+    powerups = L1_POWERUPS.map(o => ({...o, taken:false, bob:0}));
+    medals   = L1_MEDALS.map(o => ({...o, taken:false, bob:0}));
+    crates   = buildCrates(L1_CRATES_X);
+  } else {
+    LEVEL_W = L2_W; terrainPieces = L2_TERRAIN; platforms = L2_PLATFORMS;
+    checkpoints = L2_CHECKPOINTS; triggers = L2_TRIGGERS;
+    powerups = L2_POWERUPS.map(o => ({...o, taken:false, bob:0}));
+    medals   = L2_MEDALS.map(o => ({...o, taken:false, bob:0}));
+    crates   = buildCrates(L2_CRATES_X);
+  }
+}
 
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
-let autoSpawnT = 0;
+let autoSpawnT = 0, bannerT = 0;
 
 function resetPlayer(x){
   player = {
     x:x, y:groundYAt(x+11)-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
     fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, animT:0, dead:false,
+    slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
   };
 }
 
+// Boss 构造：第一关=要塞墙体；第二关=反应堆核心（炮舱未毁时核心有护盾）
+function makeBoss(idx){
+  if(idx === 1){
+    boss = {
+      kind:"fort", wallX: 15680, active:false, dead:false, t:0,
+      core:   {x:15692, y:GROUND_Y-110, w:56, h:110, hp:30, maxHp:30, dead:false},
+      cannons:[
+        {x:15640, y:GROUND_Y-210, w:40, h:32, hp:8, maxHp:8, dead:false, t:60},
+        {x:15640, y:GROUND_Y-60,  w:40, h:32, hp:8, maxHp:8, dead:false, t:150},
+      ],
+    };
+  } else {
+    const wx = L2_W - 240;                            // 9160
+    boss = {
+      kind:"reactor", wallX: wx, active:false, dead:false, t:0,
+      core:   {x:wx+22, y:210, w:70, h:130, hp:45, maxHp:45, dead:false, shielded:true},
+      cannons:[
+        {x:wx-44,  y:280, w:44, h:44, hp:12, maxHp:12, dead:false, t:0},   // 上炮舱：需登上射击台平射
+        {x:wx-44,  y:384, w:44, h:44, hp:12, maxHp:12, dead:false, t:0},   // 下炮舱：地面平射可打
+      ],
+    };
+  }
+}
 function startGame(){
   bullets=[]; ebullets=[]; enemies=[]; particles=[];
   cam=0; lives=3; score=0; killCount=0;
-  checkpoint=0; usedTriggers=new Set(); autoSpawnT=0;
-  // 原版第一关风格要塞（关卡尽头）：墙体 + 上下两门火炮 + 底部闪烁弱点核心
-  boss = {
-    wallX: 15680, active:false, dead:false, t:0,
-    core:   {x:15692, y:GROUND_Y-110, w:56, h:110, hp:30, maxHp:30, dead:false},
-    cannons:[
-      {x:15640, y:GROUND_Y-210, w:40, h:32, hp:8, maxHp:8, dead:false, t:60},
-      {x:15640, y:GROUND_Y-60,  w:40, h:32, hp:8, maxHp:8, dead:false, t:150},
-    ],
-  };
-  for(const pu of powerups) pu.taken=false;
-  for(const m of medals) m.taken=false;
-  for(const c of crates){ c.hp=c.maxHp; c.dead=false; c.flash=0; }
+  checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; bannerT=0;
+  loadLevel(1);
+  makeBoss(1);
   resetPlayer(60);
   state="insert"; stateTimer=0; shake=0;  // 开场直升机索降
   BGM.stop();
 }
+// 第一关结束 → 进入第二关（保留分数，补 2 条命）
+function nextLevel(){
+  bullets=[]; ebullets=[]; enemies=[]; particles=[]; ebullets=[];
+  cam=0; checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; shake=0;
+  loadLevel(2);
+  makeBoss(2);
+  lives = Math.max(lives, 1) + 2;
+  resetPlayer(60);
+  player.inv = 90;
+  state="play"; stateTimer=0; bannerT=170;
+  BGM.start();
+}
 
 // ---------- 工具 ----------
 const aabb = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
-// 玩家受击碰撞盒：站立时为全身；蹲下时压低到下半身（顶部在胸口高度之下，子弹从头顶飞过）
+// 玩家受击碰撞盒：站立时为全身；蹲下/滑铲时压低到下半身（子弹从头顶飞过）
 function hitbox(){
   const p = player;
+  if(p.slideT > 0) return {x:p.x-6, y:p.y+24, w:p.w+12, h:p.h-24};
   return p.crouch ? {x:p.x, y:p.y+22, w:p.w, h:p.h-22} : {x:p.x, y:p.y, w:p.w, h:p.h};
 }
 // 敌方瞄准点：固定瞄准站立时的胸口高度——蹲下即可让子弹从头顶飞过
@@ -411,25 +566,58 @@ function update(){
     keys["ArrowRight"]=true; keys["Digit1"]=false; keys["Digit2"]=false;
   }
   if(shake>0)shake--;
-
-  // ----- 玩家 -----
+  if(bannerT>0) bannerT--;
   const p = player;
   p.animT++;
   if(p.inv>0) p.inv--;
-  const spd = 3.2, airSpd = 5.6; // 空中水平速度更快 → 跳得远
+  const spd = 3.2;
   // 蹲下：仅地面可蹲，蹲下时不能移动
-  p.crouch = !!(kDown() && p.onGround);
+  p.crouch = !!(kDown() && p.onGround) || p.slideT > 0;
+  if(p.slideCd > 0) p.slideCd--;
   p.vx = 0;
-  if(!p.crouch){
-    const sv = p.onGround ? spd : airSpd;
-    if(kLeft()) { p.vx=-sv; p.face=-1; }
-    if(kRight()){ p.vx= sv; p.face= 1; }
+  if(p.crouch){
+    // ----- 滑铲：地面蹲下时按 ← / → 触发 -----
+    if(p.slideT > 0){
+      const dir = p.slideDir;
+      const gyNow   = groundYAt(p.x + p.w/2);
+      const gyAhead = groundYAt(p.x + p.w/2 + dir*34);
+      let slope = 0;
+      if(gyNow < Infinity && gyAhead < Infinity) slope = gyAhead - gyNow; // >0 前方更低=下坡
+      // 上坡阻力大（滑距≈平地一半）；下坡几乎无阻力且顺坡加速，可以一路滑到坡底
+      let fric = 0.26, acc = 0;
+      if(slope > 3){ fric = 0.07; acc = 0.13; }
+      else if(slope < -3){ fric = 0.26; acc = -0.30; }
+      p.slideV += acc - fric;
+      p.slideAge = (p.slideAge||0) + 1;
+      if(!p.onGround || p.slideV < 1.3 || p.slideAge > 110) p.slideT = 0;
+      else {
+        p.vx = dir * p.slideV; p.face = dir; p.slideT--;
+        // 长下坡：滑势未衰就继续滑（不刷时间上限，但有 slideAge 兜底）
+        if(slope > 3 && p.slideV > 3.2 && p.slideT < 6) p.slideT = 6;
+      }
+      if(p.slideT === 0) p.slideCd = 20;       // 铲完稍作停顿，不能连按刷距离
+    } else if(p.onGround && p.slideCd <= 0 && ((kLeft() && !p.prevL) || (kRight() && !p.prevR))){
+      // 起铲（需重新按方向键触发，按住不放不会连铲）
+      p.slideDir = kLeft() ? -1 : 1;
+      p.slideV = 8.4; p.slideT = 34; p.slideAge = 0; p.face = p.slideDir;
+      p.vx = p.slideDir * p.slideV;
+      sfx(220,.18,"sawtooth",.05,-120);
+      for(let i=0;i<6;i++) particles.push({x:p.x+p.w/2-p.slideDir*8, y:p.y+p.h-4,
+        vx:-p.slideDir*(1+Math.random()*1.6), vy:-Math.random()*1.4, life:16, color:"#c9c2a8"});
+    }
   }
-  // 跳跃（允许土狼时间简化：onGround 即可）——低跳高 + 大跳距（经典手感）
-  if(kJumpDown() && p.onGround){ p.vy=-11; p.onGround=false; S.jump(); }
-  p.vy += 0.62; if(p.vy>14)p.vy=14;
+  if(!p.crouch && p.slideT<=0){
+    if(kLeft()) { p.vx=-spd; p.face=-1; }
+    if(kRight()){ p.vx= spd; p.face= 1; }
+  }
+  p.prevL = kLeft(); p.prevR = kRight();
+  // 跳跃（恢复原版手感：跳得高、滞空长）
+  if(kJumpDown() && p.onGround && p.slideT<=0){ p.vy=-12.6; p.onGround=false; S.jump(); }
+  p.vy += 0.55; if(p.vy>14)p.vy=14;
   p.x += p.vx; p.y += p.vy;
   p.x = Math.max(0, Math.min(p.x, LEVEL_W - p.w));
+  // Boss 墙体：战斗中挡在墙前（通关演出时允许跨过门槛进门）
+  if(state === "play" && boss && boss.wallX && p.x + p.w > boss.wallX) p.x = boss.wallX - p.w;
 
   // 木箱：水平阻挡（跳到箱顶上方则不阻挡，可站上去当掩体）
   for(const c of crates){
@@ -480,7 +668,7 @@ function update(){
 
   // 射击（数字 1 键；一键斜射走 tryShoot 强制通道）
   if(p.fireCd>0) p.fireCd--;
-  if(kShoot()) tryShoot(false);
+  if(kShoot() && p.slideT<=0) tryShoot(false);   // 滑铲中不能开火
 
   // 道具拾取：同类武器包 = 升级（最高 Lv2），不同类 = 换枪
   for(const pu of powerups){
@@ -536,6 +724,7 @@ function update(){
       if(t.type==="trencher" || t.type==="towerSniper" || t.type==="camper"){
         enemies.push(makeFort(t.px, t.type==="towerSniper" ? "tower" : t.type));
       }
+      if(t.type==="drone") enemies.push(makeDrone(t.px, t.py));
     }
   }
   }
@@ -574,6 +763,19 @@ function update(){
             S.shoot(); e.burst--;
           }
         }
+      }
+    } else if(e.kind==="drone"){
+      // 巡逻无人机：在玩家上方漂移悬停，周期性单发瞄准射击
+      e.t = (e.t||0) + 1; e.animT += 0.5;
+      const homeX = p.x + e.side*150;
+      e.x += (homeX - e.x) * 0.010;
+      e.y = e.baseY + Math.sin(e.t*0.035)*24;
+      e.cd--;
+      if(!e.dead && e.cd<=0 && Math.abs((p.x+p.w/2)-(e.x+e.w/2))<540){
+        e.cd = 95;
+        const dx=(p.x+p.w/2)-(e.x+e.w/2), dy=chestY()-(e.y+e.h-4), d=Math.hypot(dx,dy)||1;
+        ebullets.push({x:e.x+e.w/2, y:e.y+e.h-4, w:7, h:7, vx:dx/d*4.6, vy:dy/d*4.6, life:180});
+        S.shoot();
       }
     } else if(e.kind==="fort"){ // 工事类：战壕兵 / 高塔狙击 / 草丛伏兵
       e.t++;
@@ -700,38 +902,78 @@ function update(){
   // 死亡的敌人立即移除；出界/坠落的也移除
   enemies = enemies.filter(e => !e.dead && e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80);
 
-  // ----- Boss（要塞：两门火炮 + 弱点核心） -----
+  // ----- Boss -----
   const b = boss;
   if(!b.dead){
-    if(!b.active && p.x > 15000){ b.active = true; }
+    if(!b.active && p.x > LEVEL_W - 1000){ b.active = true; }
     if(b.active){
       b.t++;
       cam = Math.min(cam+6, LEVEL_W - W);
-      if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
-      // 火炮：交替三向扇形散射
-      for(const c of b.cannons){
-        if(c.dead) continue;
-        c.t++;
-        if(c.t % 150 === 0){
-          const dx=(p.x+p.w/2)-(c.x), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
-          for(let k=-1;k<=1;k++){
-            const ang = base + k*0.3;
-            ebullets.push({x:c.x, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:220});
+      if(b.kind === "reactor"){
+        // 第二关：反应堆核心（上下两座旋转炮舱 + 护盾核心）
+        b.core.shielded = b.cannons.some(c => !c.dead);
+        if(b.t % 170 === 0) spawnRunner(true);
+        for(const c of b.cannons){
+          if(c.dead) continue;
+          c.t++;
+          if(c.t % 120 === 0){                       // 旋转八向弹幕
+            for(let k=0;k<8;k++){
+              const ang = b.t*0.045 + k*Math.PI/4;
+              ebullets.push({x:c.x+c.w/2, y:c.y+c.h/2, w:9, h:9, r:5,
+                             vx:Math.cos(ang)*3.4, vy:Math.sin(ang)*3.4, life:230});
+            }
+            S.shoot();
+          }
+          if(c.t % 120 === 60){                      // 三连瞄准（带 0.18 弧度微散）
+            const dx=(p.x+p.w/2)-(c.x+c.w/2), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
+            for(let k=-1;k<=1;k++){
+              const ang = base + k*0.18;
+              ebullets.push({x:c.x+c.w/2, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:220});
+            }
+            S.shoot();
+          }
+          if(aabb(hitbox(), c) && p.inv<=0) hurtPlayer();
+        }
+        const core = b.core;
+        if(!core.dead){
+          if(b.t % 210 === 40){                      // 环形弹幕（护盾期节奏更快）
+            const n = core.shielded ? 8 : 12;
+            for(let k=0;k<n;k++){
+              const ang = b.t*0.06 + k*Math.PI*2/n;
+              ebullets.push({x:core.x+core.w/2, y:core.y+core.h/2, w:8, h:8, r:4.6,
+                             vx:Math.cos(ang)*4.2, vy:Math.sin(ang)*4.2, life:240});
+            }
+            S.shoot();
+          }
+          if(aabb(hitbox(), core) && p.inv<=0) hurtPlayer();
+        }
+      } else {
+        if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
+        // 火炮：交替三向扇形散射
+        for(const c of b.cannons){
+          if(c.dead) continue;
+          c.t++;
+          if(c.t % 150 === 0){
+            const dx=(p.x+p.w/2)-(c.x), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
+            for(let k=-1;k<=1;k++){
+              const ang = base + k*0.3;
+              ebullets.push({x:c.x, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:220});
+            }
+            S.shoot();
+          }
+          if(aabb(hitbox(),c) && p.inv<=0) hurtPlayer();
+        }
+        // 核心：旋转环形弹幕
+        const core = b.core;
+        if(!core.dead && b.t % 170 === 30){
+          for(let k=0;k<6;k++){
+            const ang = (b.t*0.05) + k*Math.PI/3;
+            ebullets.push({x:core.x, y:core.y+core.h/2, w:8, h:8, vx:Math.cos(ang)*4.2, vy:Math.sin(ang)*4.2, life:220});
           }
           S.shoot();
         }
-        if(aabb(hitbox(),c) && p.inv<=0) hurtPlayer();
+        if(!core.dead && aabb(hitbox(),core) && p.inv<=0) hurtPlayer();
       }
-      // 核心：旋转环形弹幕
-      const core = b.core;
-      if(!core.dead && b.t % 170 === 30){
-        for(let k=0;k<6;k++){
-          const ang = (b.t*0.05) + k*Math.PI/3;
-          ebullets.push({x:core.x, y:core.y+core.h/2, w:8, h:8, vx:Math.cos(ang)*4.2, vy:Math.sin(ang)*4.2, life:220});
-        }
-        S.shoot();
-      }
-      if(!core.dead && aabb(hitbox(),core) && p.inv<=0) hurtPlayer();
     }
   }
 
@@ -771,8 +1013,8 @@ function update(){
           }
           const core = boss.core;
           if(!core.dead && Math.hypot((core.x+core.w/2)-(bl.x+7), (core.y+core.h/2)-(bl.y+7))<95){
-            core.hp-=3;
-            if(core.hp<=0) killCore();
+            if(core.shielded){ explode(core.x+core.w/2, core.y+core.h/2, "#5afff0", 12, 4); }
+            else { core.hp-=3; if(core.hp<=0) killCore(); }
           }
         }
       }
@@ -808,8 +1050,9 @@ function update(){
         }
         const core = boss.core;
         if(!core.dead && !bl.hit.has(core) && hitTest(core)){
-          bl.hit.add(core); core.hp-=3;
-          if(core.hp<=0) killCore();
+          bl.hit.add(core);
+          if(core.shielded){ explode(core.x+core.w/2, core.y+core.h/2, "#5afff0", 10, 3); }
+          else { core.hp-=3; if(core.hp<=0) killCore(); }
         }
       }
       continue;
@@ -850,8 +1093,12 @@ function update(){
       }
       const core = boss.core;
       if(bl.life>0 && !core.dead && aabb(bl,core)){
-        bl.life=0; core.hp-=bl.dmg||1; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
-        if(core.hp<=0) killCore();
+        bl.life=0;
+        if(core.shielded){ explode(bl.x,bl.y,"#5afff0",6,3); }
+        else {
+          core.hp-=bl.dmg||1; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
+          if(core.hp<=0) killCore();
+        }
       }
     }
   }
@@ -891,8 +1138,8 @@ function update(){
   particles = particles.filter(q=>q.life>0);
   for(const c of crates) if(c.flash>0) c.flash--;
 
-  // 通关演出：主角走进要塞大门 → 第二关界面
-  if(state==="walkin" && p.x >= 15660){
+  // 通关演出：主角走进基地大门 → 过关结算
+  if(state==="walkin" && p.x >= boss.core.x - 30){
     state="win"; stateTimer=0; keys["ArrowRight"]=false;
     BGM.stop(); S.clear();
   }
@@ -906,6 +1153,11 @@ function spawnRunner(fromBoss){
 }
 function makeSoldier(x,y,mode){ return {kind:"soldier",mode,x,y,w:24,h:40,vx:0,vy:0,hp:1,dead:false,cd:60+Math.random()*80,onGroundPrev:false,animT:Math.random()*100}; }
 function makeTurret(x,y,sp){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0,sp:!!sp}; }
+// 巡逻无人机（第二关新增）：悬停漂移、单发瞄准，被击落后爆炸
+function makeDrone(px, py){
+  return {kind:"drone", x:px, y:py||240, baseY:py||240, w:40, h:26, hp:2, dead:false,
+          cd:70+Math.random()*60, t:Math.random()*100, side: Math.random()<0.5?-1:1, animT:0};
+}
 // 工事类敌人：trencher 战壕兵 / tower 高塔狙击 / camper 草丛伏兵（y 记录地表高度）
 function makeFort(px, mode){
   const gy = groundYAt(px);
@@ -923,6 +1175,7 @@ function ebox(e){
 }
 function scoreFor(e){
   if(e.kind==="turret") return 500;
+  if(e.kind==="drone")  return 300;
   if(e.kind==="fort")   return e.mode==="tower"?400 : e.mode==="camper"?250 : 150;
   return e.mode==="sniper" ? 200 : 100;
 }
@@ -1036,7 +1289,49 @@ function drawTree(x, baseY, s, canopy, trunk){
   ctx.arc(x+8*s,    baseY-62*s,  18*s, 0, 7);
   ctx.fill();
 }
+// ============ 第二关：基地内部背景（钢铁走廊 / 管道 / 警示灯）============
+function drawBG2(){
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#080b11"); bg.addColorStop(.5,"#111823"); bg.addColorStop(1,"#1b2331");
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  // 远景机械墙（视差 0.25）：巨大金属板 + 竖梁
+  for(let i=-1;i<10;i++){
+    const bx = ((i*260 - cam*0.25) % 2600 + 2600) % 2600 - 200;
+    ctx.fillStyle = "#0d141d"; ctx.fillRect(bx, 60, 240, 400);
+    ctx.fillStyle = "#121a25"; ctx.fillRect(bx+8, 72, 224, 376);
+    ctx.fillStyle = "#0a1017";
+    for(let v=90; v<430; v+=54) ctx.fillRect(bx+8, v, 224, 6);
+  }
+  // 中景管道群（视差 0.45）：横贯管 + 法兰 + 冷凝水汽
+  for(let i=-1;i<12;i++){
+    const bx = ((i*180 - cam*0.45) % 2160 + 2160) % 2160 - 180;
+    ctx.fillStyle="#16202c"; ctx.fillRect(bx, 120, 164, 18);
+    ctx.fillStyle="#1d2a38"; ctx.fillRect(bx, 124, 164, 6);
+    ctx.fillStyle="#0f1721";
+    ctx.fillRect(bx+16, 116, 10, 26); ctx.fillRect(bx+120, 116, 10, 26);
+    ctx.fillStyle="#16202c"; ctx.fillRect(bx+40, 300, 120, 14);
+  }
+  // 近景立柱（视差 0.72）+ 顶部吊灯
+  for(let i=-1;i<8;i++){
+    const bx = ((i*340 - cam*0.72) % 2720 + 2720) % 2720 - 200;
+    ctx.fillStyle="#0b1119"; ctx.fillRect(bx, 0, 40, H);
+    ctx.fillStyle="#141d28"; ctx.fillRect(bx+4, 0, 8, H);
+    ctx.fillStyle="#1a2634"; ctx.fillRect(bx-6, 40, 52, 10);
+    // 吊灯 + 光锥
+    const lx = bx+20, ly = 120;
+    ctx.fillStyle="#2c3a4a"; ctx.fillRect(lx-3, 60, 6, 60);
+    ctx.fillStyle = (Math.floor((perfNow+bx)/700)%2) ? "#ffd98a" : "#8a6a2a";
+    ctx.beginPath(); ctx.arc(lx, ly, 7, 0, 7); ctx.fill();
+    ctx.globalAlpha = .07; ctx.fillStyle="#ffe9b0";
+    ctx.beginPath(); ctx.moveTo(lx-7, ly); ctx.lineTo(lx-46, 420); ctx.lineTo(lx+46, 420); ctx.lineTo(lx+7, ly); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+    // 墙上的红色警示灯
+    ctx.fillStyle = (Math.floor(perfNow/400)%2) ? "#ff3b1f" : "#5a1408";
+    ctx.fillRect(bx+30, 250, 5, 5);
+  }
+}
 function drawBG(){
+  if(LEVEL_IDX === 2) return drawBG2();
   // 天空
   const sky = ctx.createLinearGradient(0,0,0,H);
   sky.addColorStop(0,"#0b1a3a"); sky.addColorStop(.55,"#1d3f6e"); sky.addColorStop(1,"#3a6b8a");
@@ -1080,7 +1375,91 @@ function drawBG(){
     ctx.stroke();
   }
 }
+// ============ 第二关：钢铁地板 + 能量深坑 ============
+function drawTerrain2(){
+  // 深坑：底部熔炉式能量池（发光脉动）
+  const heat = .55 + .45*Math.sin(perfNow/420);
+  const pit = ctx.createLinearGradient(0,470,0,H+20);
+  pit.addColorStop(0,"#7a2a08"); pit.addColorStop(.45,"#ff6a1a"); pit.addColorStop(1,"#ffd24a");
+  ctx.fillStyle = pit; ctx.globalAlpha = .55 + .25*heat;
+  ctx.fillRect(cam-20, 470, W+40, H-470+20);
+  ctx.globalAlpha = 1;
+  // 气泡
+  for(let i=0;i<14;i++){
+    const bx = ((i*137 + Math.sin((perfNow/900)+i)*30) % (W+60));
+    ctx.fillStyle = "rgba(255,240,180,"+(.25+.35*Math.abs(Math.sin(perfNow/300+i)))+")";
+    ctx.beginPath(); ctx.arc(cam+bx-20, 495+((i*13)%30), 2+((i%3)), 0, 7); ctx.fill();
+  }
+  // 地板：金属平台（顶面高光 + 铆钉 + 承重梁）
+  for(const pc of terrainPieces){
+    const pts = pc.pts;
+    if(pts[pts.length-1][0] < cam-20 || pts[0][0] > cam+W+20) continue;
+    ctx.fillStyle="#242b34";
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0]-cam, pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0]-cam, pts[i][1]);
+    ctx.lineTo(pts[pts.length-1][0]-cam, H+20);
+    ctx.lineTo(pts[0][0]-cam, H+20);
+    ctx.closePath(); ctx.fill();
+    // 承重梁纹理
+    ctx.fillStyle="#1b222b";
+    for(let i=0;i<pts.length-1;i++){
+      const [ax,ay]=pts[i], [bx2,by]=pts[i+1];
+      const steps = Math.max(1, Math.floor((bx2-ax)/64));
+      for(let s=0;s<steps;s++){
+        const t=(s+0.5)/steps, tx=ax+(bx2-ax)*t, ty=ay+(by-ay)*t;
+        ctx.fillRect(tx-cam-3, ty+26, 6, H-ty);
+      }
+    }
+    // 顶面钢板高光
+    ctx.strokeStyle="#6d7b8c"; ctx.lineWidth=5; ctx.lineCap="butt";
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0]-cam, pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0]-cam, pts[i][1]);
+    ctx.stroke();
+    // 警示黄条（地板边缘）
+    ctx.strokeStyle="#c8a02a"; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0]-cam, pts[0][1]+7);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0]-cam, pts[i][1]+7);
+    ctx.stroke();
+    // 铆钉
+    ctx.fillStyle="#8794a3";
+    for(let i=0;i<pts.length-1;i++){
+      const [ax,ay]=pts[i], [bx2,by]=pts[i+1];
+      const step=(bx2-ax);
+      const steps = Math.max(1, Math.floor(step/56));
+      for(let s=0;s<=steps;s++){
+        const t=s/steps, tx=ax+(bx2-ax)*t, ty=ay+(by-ay)*t;
+        ctx.fillRect(tx-cam-1, ty+3, 3, 3);
+      }
+    }
+    // 断口（深坑）侧壁发光
+    ctx.strokeStyle="rgba(255,120,30,.5)"; ctx.lineWidth=3;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0]-cam, pts[0][1]); ctx.lineTo(pts[0][0]-cam, H+20);
+    ctx.moveTo(pts[pts.length-1][0]-cam, pts[pts.length-1][1]); ctx.lineTo(pts[pts.length-1][0]-cam, H+20);
+    ctx.stroke();
+  }
+  // 平台（钢制栈桥：格栅 + 侧梁 + 警示边）
+  for(const pl of platforms){
+    if(pl.x+pl.w<cam || pl.x>cam+W) continue;
+    ctx.fillStyle="#2f3843"; ctx.fillRect(pl.x-cam, pl.y, pl.w, pl.h);
+    ctx.fillStyle="#6d7b8c"; ctx.fillRect(pl.x-cam, pl.y, pl.w, 4);
+    ctx.fillStyle="#1c232b"; ctx.fillRect(pl.x-cam, pl.y+pl.h-4, pl.w, 4);
+    // 格栅
+    ctx.strokeStyle="#202932"; ctx.lineWidth=2;
+    for(let gx=pl.x+8; gx<pl.x+pl.w-6; gx+=16){
+      ctx.beginPath(); ctx.moveTo(gx-cam, pl.y+4); ctx.lineTo(gx-cam, pl.y+pl.h-4); ctx.stroke();
+    }
+    // 两端吊索
+    ctx.strokeStyle="#48545f"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(pl.x-cam+6, pl.y); ctx.lineTo(pl.x-cam+6, pl.y-14);
+    ctx.moveTo(pl.x-cam+pl.w-6, pl.y); ctx.lineTo(pl.x-cam+pl.w-6, pl.y-14); ctx.stroke();
+  }
+}
 function drawTerrain(){
+  if(LEVEL_IDX === 2) return drawTerrain2();
   // 悬崖水潭（水面横贯，被地形多边形覆盖后只在断口露出）
   ctx.fillStyle="#123a55";
   ctx.fillRect(cam-20, 495, W+40, H-495+20);
@@ -1219,6 +1598,31 @@ function drawPlayer(){
   }
   ctx.restore();
 }
+function drawPlayerSlide(){
+  const p = player;
+  if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return;
+  const x = p.x-cam, y = p.y;
+  ctx.save(); ctx.translate(x+p.w/2, y); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
+  // 身体几乎贴地：腿前伸、上身后仰
+  ctx.fillStyle="#2857a8"; ctx.fillRect(2,30,22,7);            // 前伸的双腿
+  ctx.fillStyle="#3a6dc4"; ctx.fillRect(2,30,22,3);            // 裤腿高光
+  ctx.fillStyle="#1c1c22"; ctx.fillRect(24,32,7,5);            // 军靴
+  ctx.fillStyle="#e8a878"; ctx.fillRect(0,26,16,12);           // 躯干（后仰）
+  ctx.fillStyle="#7a4a28"; ctx.fillRect(0,29,16,3);            // 弹带
+  ctx.fillStyle="#e8a878"; ctx.fillRect(-6,22,12,10);          // 头
+  ctx.fillStyle="#d42a2a"; ctx.fillRect(-7,20,14,5);           // 头巾
+  ctx.fillRect(2,22,7,3);
+  // 枪横贴身侧
+  ctx.fillStyle="#444"; ctx.fillRect(6,24,14,4);
+  // 铲地扬尘
+  const dust = (p.animT%6<3);
+  if(dust){
+    ctx.fillStyle="#cfc7ad"; ctx.globalAlpha=.55;
+    ctx.fillRect(-10,32,8,4); ctx.fillRect(-16,30,6,3);
+    ctx.globalAlpha=1;
+  }
+  ctx.restore();
+}
 function drawPlayerCrouch(){
   const p = player;
   if(p.inv>0 && Math.floor(p.inv/4)%2===0) return;
@@ -1234,8 +1638,37 @@ function drawPlayerCrouch(){
   ctx.fillStyle="#444";    ctx.fillRect(14,32,12,4);         // 枪
   ctx.restore();
 }
+function drawDrone(e, x, y){
+  const w = e.w, h = e.h;
+  // 旋翼（高速旋转的虚影）
+  const rw = 22 + Math.sin(e.animT*2.4)*3;
+  ctx.strokeStyle="#8f9aa8"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(x+w/2-rw, y-4); ctx.lineTo(x+w/2+rw, y-4); ctx.stroke();
+  ctx.globalAlpha=.5;
+  ctx.beginPath(); ctx.moveTo(x+w/2-rw*0.7, y-7); ctx.lineTo(x+w/2+rw*0.7, y-7); ctx.stroke();
+  ctx.globalAlpha=1;
+  ctx.fillStyle="#3a4048"; ctx.fillRect(x+w/2-3, y-8, 6, 6);     // 旋翼轴
+  // 机体（金属球壳）
+  ctx.fillStyle="#4a525c";
+  ctx.beginPath(); ctx.ellipse(x+w/2, y+h/2, w/2, h/2, 0, 0, 7); ctx.fill();
+  ctx.fillStyle="#5d6874";
+  ctx.beginPath(); ctx.ellipse(x+w/2, y+h/2-3, w/2-6, h/2-6, 0, 0, 7); ctx.fill();
+  // 侧翼喷口
+  ctx.fillStyle="#2b3138";
+  ctx.fillRect(x-4, y+h/2-3, 8, 6); ctx.fillRect(x+w-4, y+h/2-3, 8, 6);
+  // 红色单眼（瞄准时变亮）
+  const hot = e.cd < 25;
+  ctx.fillStyle = hot ? "#ff3b1f" : "#c03018";
+  ctx.beginPath(); ctx.arc(x+w/2+4, y+h/2+1, 4.5, 0, 7); ctx.fill();
+  if(hot){ ctx.globalAlpha=.35; ctx.fillStyle="#ff3b1f";
+    ctx.beginPath(); ctx.arc(x+w/2+4, y+h/2+1, 9, 0, 7); ctx.fill(); ctx.globalAlpha=1; }
+  // 挂载炮管
+  ctx.fillStyle="#20262c"; ctx.fillRect(x+w/2-2, y+h-6, 6, 7);
+}
 function drawSoldier(e){
   const x=e.x-cam, y=e.y, t=(e.animT+=0.3);
+  // ----- 巡逻无人机 -----
+  if(e.kind==="drone"){ drawDrone(e, x, y); return; }
   // ----- 工事类 -----
   if(e.kind==="fort"){
     if(e.mode==="trencher"){
@@ -1335,7 +1768,131 @@ function drawSoldier(e){
   }
   ctx.restore();
 }
+// ============ 第二关 Boss：反应堆核心 + 上下旋转炮舱 ============
+function drawReactor(){
+  const b = boss, wx = b.wallX - cam;
+  if(wx > W + 260) return;
+  const wallW = W + 320;
+  // 基地后方巨型墙体
+  ctx.fillStyle="#2a3038"; ctx.fillRect(wx, 0, wallW, GROUND_Y);
+  ctx.fillStyle="#22282f";
+  for(let wy=0; wy<GROUND_Y; wy+=46) ctx.fillRect(wx, wy, wallW, 4);
+  // 竖梁与管线
+  ctx.fillStyle="#1a2027";
+  for(let px=wx+30; px<wx+wallW; px+=120) ctx.fillRect(px, 0, 14, GROUND_Y);
+  ctx.fillStyle="#333c47";
+  for(let px=wx+60; px<wx+wallW; px+=120){
+    ctx.fillRect(px, 0, 8, GROUND_Y);
+    for(let py=40; py<GROUND_Y; py+=90) ctx.fillRect(px-8, py, 24, 8);
+  }
+  // 顶部警示排灯
+  for(let px=wx+20; px<wx+wallW; px+=64){
+    const on = Math.floor((perfNow/380) + px/64) % 2 === 0;
+    ctx.fillStyle = on ? "#ff3b1f" : "#4a1004";
+    ctx.fillRect(px, 18, 12, 7);
+  }
+
+  // ---- 核心（六边形反应堆）----
+  const c = b.core, cx = c.x - cam, cy = c.y;
+  ctx.fillStyle="#141a20"; ctx.fillRect(cx-14, cy-14, c.w+28, c.h+28);
+  ctx.fillStyle="#39424e"; ctx.fillRect(cx-8, cy-8, c.w+16, c.h+16);
+  if(!c.dead){
+    const pulse = .55 + .45*Math.abs(Math.sin(perfNow/260));
+    // 反应堆外壳
+    ctx.fillStyle="#4a5563";
+    ctx.beginPath();
+    ctx.moveTo(cx+c.w/2, cy-10); ctx.lineTo(cx+c.w+6, cy+c.h*0.25);
+    ctx.lineTo(cx+c.w+6, cy+c.h*0.75); ctx.lineTo(cx+c.w/2, cy+c.h+10);
+    ctx.lineTo(cx-6, cy+c.h*0.75); ctx.lineTo(cx-6, cy+c.h*0.25);
+    ctx.closePath(); ctx.fill();
+    // 内部能量
+    const eg = ctx.createRadialGradient(cx+c.w/2, cy+c.h/2, 6, cx+c.w/2, cy+c.h/2, c.h*0.62);
+    eg.addColorStop(0, "#fffbe0");
+    eg.addColorStop(.45, c.shielded ? "#5afff0" : "#ffb347");
+    eg.addColorStop(1, c.shielded ? "#1a5a66" : "#7a1a04");
+    ctx.fillStyle = eg;
+    ctx.fillRect(cx, cy, c.w, c.h);
+    // 能量流动条纹
+    ctx.globalAlpha = .35; ctx.fillStyle="#ffffff";
+    for(let s=0; s<6; s++){
+      const sy = cy + ((perfNow/6 + s*22) % c.h);
+      ctx.fillRect(cx, sy, c.w, 2);
+    }
+    ctx.globalAlpha = 1;
+    // 护盾力场（两座炮舱未毁 → 核心无敌）
+    if(c.shielded){
+      ctx.globalAlpha = .22 + .16*pulse;
+      ctx.strokeStyle="#5afff0"; ctx.lineWidth=4;
+      ctx.beginPath(); ctx.arc(cx+c.w/2, cy+c.h/2, c.h*0.78, 0, 7); ctx.stroke();
+      ctx.globalAlpha = .10 + .08*pulse; ctx.fillStyle="#5afff0";
+      ctx.beginPath(); ctx.arc(cx+c.w/2, cy+c.h/2, c.h*0.78, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+      // 六边形网格
+      ctx.strokeStyle="rgba(120,255,245,.35)"; ctx.lineWidth=1;
+      for(let a=0; a<6; a++){
+        const ang = a*Math.PI/3 + perfNow/2600;
+        ctx.beginPath();
+        ctx.moveTo(cx+c.w/2, cy+c.h/2);
+        ctx.lineTo(cx+c.w/2+Math.cos(ang)*c.h*0.78, cy+c.h/2+Math.sin(ang)*c.h*0.78);
+        ctx.stroke();
+      }
+    }
+  } else {
+    // 核心熔毁：破口透出稳定白光（第二关终点）
+    const dg = ctx.createLinearGradient(0, cy, 0, cy+c.h);
+    dg.addColorStop(0,"#eaffff"); dg.addColorStop(1,"#ffd27a");
+    ctx.fillStyle=dg; ctx.fillRect(cx, cy, c.w, c.h);
+    ctx.globalAlpha = .3 + .15*Math.sin(perfNow/120);
+    ctx.fillStyle="#fff3a0"; ctx.fillRect(cx-30, cy-20, c.w+60, c.h+40);
+    ctx.globalAlpha=1;
+  }
+
+  // ---- 上下炮舱（旋转炮塔，可被摧毁解除护盾）----
+  for(const g of b.cannons){
+    const gx = g.x-cam + g.w/2, gy = g.y + g.h/2;
+    // 支架
+    ctx.strokeStyle="#2c343d"; ctx.lineWidth=8;
+    ctx.beginPath(); ctx.moveTo(gx+g.w*0.6, gy); ctx.lineTo(gx+g.w*0.6+30, gy); ctx.stroke();
+    // 炮舱圆壳
+    ctx.fillStyle = g.dead ? "#2a2f36" : "#48525f";
+    ctx.beginPath(); ctx.arc(gx, gy, g.w/2, 0, 7); ctx.fill();
+    ctx.fillStyle = g.dead ? "#22262c" : "#5c6875";
+    ctx.beginPath(); ctx.arc(gx, gy, g.w/2-7, 0, 7); ctx.fill();
+    if(!g.dead){
+      // 八个炮口围绕（旋转）
+      ctx.fillStyle="#20262c";
+      for(let k=0;k<8;k++){
+        const ang = b.t*0.045 + k*Math.PI/4;
+        const ex = gx + Math.cos(ang)*(g.w/2-1), ey = gy + Math.sin(ang)*(g.w/2-1);
+        ctx.save(); ctx.translate(ex, ey); ctx.rotate(ang); ctx.fillRect(-9, -3.5, 12, 7); ctx.restore();
+      }
+      // 中心红眼
+      ctx.fillStyle = (Math.floor(b.t/12)%2) ? "#ff5b3d" : "#7a1a10";
+      ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 7); ctx.fill();
+    } else {
+      // 废炮舱：焦黑破口 + 冒烟
+      ctx.fillStyle="#0e0f12";
+      ctx.beginPath(); ctx.arc(gx-3, gy+2, 9, 0, 7); ctx.fill();
+      ctx.globalAlpha = .3; ctx.fillStyle="#6a6a72";
+      ctx.beginPath(); ctx.arc(gx-6, gy-14-((perfNow/90)%14), 5, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- 血条 / 状态 ----
+  if(!b.dead){
+    const alive = b.cannons.filter(g=>!g.dead).length;
+    ctx.fillStyle="#000a"; ctx.fillRect(W/2-170, 24, 340, 18);
+    // 护盾期显示炮舱剩余进度，解除后显示核心血量
+    const ratio = c.shielded ? alive/2 : c.hp/c.maxHp;
+    ctx.fillStyle = c.shielded ? "#5afff0" : "#ff5b3d";
+    ctx.fillRect(W/2-168, 27, 336*Math.max(0, ratio), 13);
+    ctx.fillStyle="#fff"; ctx.font="12px monospace";
+    ctx.fillText(c.shielded ? "反应堆护盾力场 — 先摧毁炮舱 (" + (2-alive) + "/2)" : "反应堆核心", W/2-70, 56);
+  }
+}
 function drawBoss(){
+  if(boss.kind === "reactor") return drawReactor();
   const b = boss, wx = b.wallX - cam;
   if(wx > W + 100) return;
   // 要塞墙体
@@ -1477,16 +2034,20 @@ function drawPowerups(){
 function drawHUD(){
   ctx.fillStyle="#fff"; ctx.font="bold 16px monospace";
   ctx.fillText("分数 " + score, 20, 32);
+  // 关卡标签
+  ctx.fillStyle = LEVEL_IDX===1 ? "#7fd7a0" : "#7fbcff";
+  ctx.font="bold 13px monospace";
+  ctx.fillText(LEVEL_IDX===1 ? "第 1 关 · 丛林突击" : "第 2 关 · 基地突入", 20, 54);
   // 生命（小人图标）
   for(let i=0;i<Math.max(0,lives);i++){
-    ctx.fillStyle="#e8a878"; ctx.fillRect(20+i*24, 46, 10, 12);
-    ctx.fillStyle="#d42a2a"; ctx.fillRect(20+i*24, 44, 10, 4);
+    ctx.fillStyle="#e8a878"; ctx.fillRect(20+i*24, 68, 10, 12);
+    ctx.fillStyle="#d42a2a"; ctx.fillRect(20+i*24, 66, 10, 4);
   }
   if(player.weapon!=="N"){
     const names = {S:"散弹枪", M:"机枪", L:"镭射枪", B:"炸弹"};
     const lv = player.wlv[player.weapon]||0;
     ctx.fillStyle="#ffd34d";
-    ctx.fillText(player.weapon + " " + names[player.weapon] + (lv>=1 ? " Lv"+(lv+1) : ""), 20, 84);
+    ctx.fillText(player.weapon + " " + names[player.weapon] + (lv>=1 ? " Lv"+(lv+1) : ""), 20, 104);
   }
   // 进度条
   ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
@@ -1514,7 +2075,7 @@ function render(){
   if(state==="insert") drawInsert();
   if(state==="title"){
     ctx.restore();
-    drawOverlay("魂斗罗", "第一关 · 丛林突击", "#4da6ff");
+    drawOverlay("魂斗罗", "第 1 关 · 丛林突击　→　第 2 关 · 基地突入", "#4da6ff");
     return;
   }
   drawTerrain();
@@ -1523,13 +2084,26 @@ function render(){
   drawMedals();
   for(const e of enemies) drawSoldier(e);
   drawBoss();
-  if(player.crouch) drawPlayerCrouch(); else drawPlayer();
+  if(player.slideT > 0) drawPlayerSlide();
+  else if(player.crouch) drawPlayerCrouch(); else drawPlayer();
   drawBullets();
   drawParticles();
   ctx.restore();
   drawHUD();
-  if(state==="over"){ drawOverlay("游戏结束", "击杀 " + killCount + " · 得分 " + score, "#ff5b3d"); }
-  if(state==="win"){
+  if(state==="over"){ drawOverlay("游戏结束", (LEVEL_IDX===1?"第一关":"第二关") + " · 击杀 " + killCount + " · 得分 " + score, "#ff5b3d"); }
+  // 关卡开场横幅
+  if(bannerT>0 && state==="play"){
+    const a = Math.min(1, Math.min(bannerT, 170-bannerT)/30);
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.textAlign="center";
+    ctx.fillStyle="#0a1018"; ctx.fillRect(0, H/2-58, W, 96);
+    ctx.fillStyle="#7fbcff"; ctx.font="bold 40px monospace";
+    ctx.fillText("第 2 关 · 基地突入", W/2, H/2-10);
+    ctx.fillStyle="#cfd8e3"; ctx.font="15px monospace";
+    ctx.fillText("潜入敌军基地 —— 摧毁反应堆核心", W/2, H/2+22);
+    ctx.textAlign="left"; ctx.globalAlpha=1;
+  }
+  if(state==="win" && LEVEL_IDX===1){
     // 第二关开启界面
     ctx.fillStyle="#000d"; ctx.fillRect(0,0,W,H);
     ctx.textAlign="center";
@@ -1544,12 +2118,31 @@ function render(){
     ctx.fillRect(W/2-52, H/2-52, 104, 14);
     ctx.globalAlpha=1;
     ctx.fillStyle="#cfd8e3"; ctx.font="16px monospace";
-    ctx.fillText("主角已突入要塞大门 —— 第二关 装载中…", W/2, H/2+104);
+    ctx.fillText("主角已突入要塞大门 —— 前方就是敌军基地", W/2, H/2+104);
     ctx.fillStyle="#ffd34d"; ctx.font="bold 20px monospace";
     ctx.fillText("得分 " + score + " · 击杀 " + killCount, W/2, H/2+140);
     if(Math.floor(perfNow/500)%2===0){
       ctx.fillStyle="#fff"; ctx.font="16px monospace";
-      ctx.fillText("- 按 Enter 再战一回合 -", W/2, H/2+180);
+      ctx.fillText("- 按 Enter 进入第二关 -", W/2, H/2+180);
+    }
+    ctx.textAlign="left";
+  }
+  if(state==="win" && LEVEL_IDX===2){
+    // 全关卡通关
+    ctx.fillStyle="#000e"; ctx.fillRect(0,0,W,H);
+    ctx.textAlign="center";
+    ctx.fillStyle="#ffd34d"; ctx.font="bold 46px monospace";
+    ctx.fillText("任务完成！", W/2, H/2-80);
+    ctx.fillStyle="#7fbcff"; ctx.font="bold 22px monospace";
+    ctx.fillText("反应堆核心已熔毁 —— 敌军基地陷落", W/2, H/2-34);
+    ctx.fillStyle="#cfd8e3"; ctx.font="16px monospace";
+    ctx.fillText("第一关 · 丛林突击   ✔", W/2, H/2+14);
+    ctx.fillText("第二关 · 基地突入   ✔", W/2, H/2+44);
+    ctx.fillStyle="#ffd34d"; ctx.font="bold 22px monospace";
+    ctx.fillText("总得分 " + score + " · 总击杀 " + killCount, W/2, H/2+92);
+    if(Math.floor(perfNow/500)%2===0){
+      ctx.fillStyle="#fff"; ctx.font="16px monospace";
+      ctx.fillText("- 按 Enter 重新开始 -", W/2, H/2+140);
     }
     ctx.textAlign="left";
   }
@@ -1558,7 +2151,11 @@ function render(){
 // ---------- 游戏状态 ----------
 const gameState = {
   onEnter(){
-    if(state==="title" || state==="over" || state==="win") startGame();
+    if(state==="title" || state==="over") { startGame(); return; }
+    if(state==="win"){
+      if(LEVEL_IDX === 1) nextLevel();
+      else startGame();
+    }
   }
 };
 

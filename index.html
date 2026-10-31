@@ -583,21 +583,22 @@ function update(){
       const gyAhead = groundYAt(p.x + p.w/2 + dir*34);
       let slope = 0;
       if(gyNow < Infinity && gyAhead < Infinity) slope = gyAhead - gyNow; // >0 前方更低=下坡
-      // 上坡阻力大（滑距≈平地一半）；下坡几乎无阻力且顺坡加速，可以一路滑到坡底
-      let fric = 0.26, acc = 0;
-      if(slope > 3){ fric = 0.07; acc = 0.13; }
-      else if(slope < -3){ fric = 0.26; acc = -0.30; }
-      p.slideV += acc - fric;
+      // 上坡阻力大（滑距≈平地一半）；下坡阻力略小 → 只比平地多一点点
+      let fric = 0.26;
+      if(slope > 1.5)       fric = 0.215;   // 下坡：比平地多约 20% 距离
+      else if(slope < -1.5) fric = 0.56;    // 上坡：约平地一半
+      p.slideV -= fric;
       p.slideAge = (p.slideAge||0) + 1;
-      if(!p.onGround || p.slideV < 1.3 || p.slideAge > 110) p.slideT = 0;
-      else {
-        p.vx = dir * p.slideV; p.face = dir; p.slideT--;
-        // 长下坡：滑势未衰就继续滑（不刷时间上限，但有 slideAge 兜底）
-        if(slope > 3 && p.slideV > 3.2 && p.slideT < 6) p.slideT = 6;
-      }
+      // 悬崖边缘收铲：预测下一步落点，若已经踩空就直接停住（不会被滑势带着冲下深坑）
+      const nxC = p.x + dir*Math.max(p.slideV, 1) + p.w/2;
+      const lipAhead = gyNow < Infinity && groundYAt(nxC) === Infinity;
+      // 下坡不续时间：滑势一旦衰减到 1.3 就收铲，绝不一滑到底
+      if(lipAhead || !p.onGround || p.slideV < 1.3 || p.slideAge > 48){ p.slideT = 0; if(lipAhead) p.vx = 0; }
+      else { p.vx = dir * p.slideV; p.face = dir; p.slideT--; }
       if(p.slideT === 0) p.slideCd = 20;       // 铲完稍作停顿，不能连按刷距离
-    } else if(p.onGround && p.slideCd <= 0 && ((kLeft() && !p.prevL) || (kRight() && !p.prevR))){
-      // 起铲（需重新按方向键触发，按住不放不会连铲）
+    } else if(p.onGround && p.slideCd <= 0 && ((kLeft() && !p.prevL) || (kRight() && !p.prevR))
+              && groundYAt(p.x + p.w/2 + (kLeft()?-9:9)) < Infinity){
+      // 起铲（需重新按方向键触发，按住不放不会连铲；紧贴崖边时不起铲，避免直接滑进坑里）
       p.slideDir = kLeft() ? -1 : 1;
       p.slideV = 8.4; p.slideT = 34; p.slideAge = 0; p.face = p.slideDir;
       p.vx = p.slideDir * p.slideV;
@@ -652,6 +653,15 @@ function update(){
     }
   }
   p.onGround = landed;
+
+  // 滑铲贴地：滑行速度远大于走路，坡面下沉比重力快，不贴地会起铲即腾空而断铲
+  if(p.slideT > 0){
+    const gy = groundYAt(p.x + p.w/2);
+    if(gy < Infinity){
+      const feet = p.y + p.h;
+      if(feet >= gy - 22 && feet <= gy + 24){ p.y = gy - p.h; p.vy = 0; p.onGround = true; landed = true; }
+    }
+  }
 
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }

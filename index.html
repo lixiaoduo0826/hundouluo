@@ -480,6 +480,7 @@ function resetPlayer(x){
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
     fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, diagDir:0, animT:0, dead:false,
     slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
+    rolling:false, rollAng:0, rollDir:1, landT:0,
   };
 }
 
@@ -628,7 +629,11 @@ function update(){
   }
   p.prevL = kLeft(); p.prevR = kRight();
   // 跳跃（恢复原版手感：跳得高、滞空长）
-  if(kJumpDown() && p.onGround && p.slideT<=0){ p.vy=-12.6; p.onGround=false; S.jump(); }
+  if(kJumpDown() && p.onGround && p.slideT<=0){
+    p.vy=-12.6; p.onGround=false; S.jump();
+    // 起跳瞬间进入空中前滚翻（落地转回站立）
+    p.rolling = true; p.rollDir = p.face; p.rollAng = 0;
+  }
   p.vy += 0.55; if(p.vy>14)p.vy=14;
   // 传送带：站在带上顺向加速 / 逆向减速（不按键也会被带着走）
   p.belt = 0;
@@ -686,6 +691,20 @@ function update(){
     }
   }
   p.onGround = landed;
+
+  // 空中前滚翻：翻滚角度由竖直速度推导（起跳 0° → 顶点 180° → 落地 360°），
+  // 与跳跃物理天然同步，落地正好转回站立姿势
+  if(p.rolling){
+    if(!p.onGround){
+      const v = Math.max(-12.6, Math.min(12.6, p.vy));
+      p.rollAng = ((v + 12.6) / 25.2) * Math.PI * 2 * p.rollDir;
+    } else {
+      p.rolling = false; p.rollAng = 0; p.landT = 7;   // 落地卸力
+      for(let i=0;i<4;i++) particles.push({x:p.x+p.w/2+(Math.random()-0.5)*14, y:p.y+p.h-2,
+        vx:(Math.random()-0.5)*1.8, vy:-Math.random()*1.1, life:13, color:"#cfc7ad"});
+    }
+  }
+  if(p.landT>0) p.landT--;
 
   // 滑铲贴地：滑行速度远大于走路，坡面下沉比重力快，不贴地会起铲即腾空而断铲
   if(p.slideT > 0){
@@ -819,23 +838,37 @@ function update(){
   for(const e of enemies){
     if(e.kind==="turret"){
       e.cd--;
-      const dx = (p.x+p.w/2) - (e.x+e.w/2), dy = chestY() - (e.y+8);
+      if(e.kick>0) e.kick--;
+      const cxT = e.x + e.w/2, cyT = e.y + 19;            // 炮塔转轴
+      const dx = (p.x+p.w/2) - cxT, dy = chestY() - cyT;
+      // —— 炮塔平滑转向：每帧最多转一点，先"转头"再开火（给玩家反应时间）——
+      const tgt = Math.atan2(dy, dx);
+      if(e.gunA === undefined) e.gunA = Math.PI;          // 初始朝左（玩家来向）
+      let da = tgt - e.gunA;
+      while(da >  Math.PI) da -= Math.PI*2;
+      while(da < -Math.PI) da += Math.PI*2;
+      const turn = e.sp ? 0.05 : 0.072;                   // 特殊炮台转头更慢
+      if(Math.abs(da) <= turn) e.gunA = tgt; else e.gunA += Math.sign(da)*turn;
+      const aimed = Math.abs(da) < 0.15;                  // 大致对准才开火
+      // 炮口位置（沿炮管方向伸出）
+      const mx = cxT + Math.cos(e.gunA)*31, my = cyT + Math.sin(e.gunA)*31;
       if(e.sp){
         // 特殊炮台：单发瞄准、节奏慢、无散射
-        if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
-          e.cd = 170;
-          enemyShot(e.x+e.w/2, e.y+8, p.x+p.w/2, chestY(), 4.2, 0.10, 160);
+        if(!e.dead && Math.abs(dx)<560 && aimed && e.cd<=0){
+          e.cd = 170; e.kick = 5;
+          enemyShot(mx, my, mx+Math.cos(e.gunA)*120, my+Math.sin(e.gunA)*120, 4.2, 0.06, 160);
           S.shoot();
         }
       } else {
-        if(!e.dead && Math.abs(dx)<560 && e.cd<=0){
-          e.cd = 130; e.burst = 3;
+        if(!e.dead && Math.abs(dx)<560 && aimed && e.cd<=0){
+          e.cd = 130; e.burst = 3; e.bt = 0;
         }
         if(e.burst>0){
           e.bt = (e.bt||0)+1;
           if(e.bt%18===1){
             // 三连单发瞄准（打点有偏差，玩家蹲/跳可躲）
-            enemyShot(e.x+e.w/2, e.y+8, p.x+p.w/2, chestY(), 4.8, 0.12, 160);
+            e.kick = 5;
+            enemyShot(mx, my, mx+Math.cos(e.gunA)*120, my+Math.sin(e.gunA)*120, 4.8, 0.09, 160);
             S.shoot(); e.burst--;
           }
         }
@@ -1338,7 +1371,7 @@ function spawnRunner(fromBoss){
   enemies.push(makeSoldier(x, gy<Infinity ? gy-40 : 300, "runner"));
 }
 function makeSoldier(x,y,mode){ return {kind:"soldier",mode,x,y,w:24,h:40,vx:0,vy:0,hp:1,dead:false,cd:60+Math.random()*80,onGroundPrev:false,animT:Math.random()*100}; }
-function makeTurret(x,y,sp){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0,sp:!!sp}; }
+function makeTurret(x,y,sp){ return {kind:"turret",x,y,w:44,h:40,hp:3,dead:false,cd:90,burst:0,bt:0,gunA:Math.PI,kick:0,sp:!!sp}; }
 // 巡逻无人机（第二关新增）：悬停漂移、单发瞄准，被击落后爆炸
 function makeDrone(px, py){
   return {kind:"drone", x:px, y:py||240, baseY:py||240, w:40, h:26, hp:2, dead:false,
@@ -1960,6 +1993,64 @@ function drawPlayer(){
   }
   ctx.restore();
 }
+function drawPlayerRoll(){
+  const p = player;
+  if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return;
+  const x = p.x-cam, y = p.y;
+  const skin="#e9b184", skinD="#c98d63", pants="#20477c", pantsHi="#3567ad",
+        boot="#15171c", shirt="#1d3f6e";
+  // 落地投影
+  ctx.globalAlpha=.26; ctx.fillStyle="#000";
+  ctx.beginPath(); ctx.ellipse(x+p.w/2, p.y+p.h+1.5, 10.5, 3, 0, 0, 7); ctx.fill();
+  ctx.globalAlpha=1;
+  ctx.save();
+  ctx.translate(x + p.w/2, y + p.h/2);   // 以身体中心为翻转轴
+  ctx.rotate(p.rollAng);
+  // —— 蜷成一团：后臀 + 抱膝的大腿 ——
+  ctx.fillStyle=shirt;
+  ctx.beginPath(); ctx.arc(-3, 1, 8.2, 0, 7); ctx.fill();
+  ctx.fillStyle=skinD;
+  ctx.beginPath(); ctx.arc(-3.6, 1.6, 6.4, 0, 7); ctx.fill();
+  // 大腿（膝盖顶到胸口）
+  ctx.fillStyle=pants;
+  ctx.beginPath(); ctx.arc(-1, 2.5, 7, 0, 7); ctx.fill();
+  ctx.fillStyle=pantsHi;
+  ctx.beginPath(); ctx.arc(-1.4, 1, 5.2, 0, 7); ctx.fill();
+  // 小腿 + 军靴（收在身下）
+  ctx.fillStyle=pants; ctx.fillRect(-9.5, 4, 9, 5.4);
+  ctx.fillStyle=boot;  ctx.fillRect(-10.5, 6.6, 7.4, 4.6);
+  ctx.fillRect(-3.5, 8.2, 6.6, 4.2);
+  // 上身（前倾抱膝）
+  ctx.fillStyle=skin;
+  ctx.beginPath(); ctx.arc(1.5, -3.4, 7.6, 0, 7); ctx.fill();
+  ctx.fillStyle=shirt;
+  ctx.beginPath(); ctx.arc(0.6, -2.2, 6.2, 0, 7); ctx.fill();
+  // 抱膝的手臂
+  ctx.strokeStyle=skin; ctx.lineWidth=4.4; ctx.lineCap="round";
+  ctx.beginPath(); ctx.moveTo(4.6, -4.2); ctx.quadraticCurveTo(7.4, 0, 3.2, 3.4); ctx.stroke();
+  ctx.strokeStyle=skinD; ctx.lineWidth=1.4;
+  ctx.beginPath(); ctx.moveTo(4.2, -2.2); ctx.quadraticCurveTo(6.4, 0, 3.4, 2.6); ctx.stroke();
+  ctx.lineCap="butt";
+  // 头（下巴抵住膝盖）
+  ctx.fillStyle=skin;
+  ctx.beginPath(); ctx.arc(6.6, -6.2, 5.8, 0, 7); ctx.fill();
+  ctx.fillStyle=skinD;
+  ctx.beginPath(); ctx.arc(7.6, -4.6, 4.2, -0.4, 1.5); ctx.fill();
+  // 红头巾 + 飘带（翻滚时甩动）
+  ctx.fillStyle="#cf2d2d";
+  ctx.beginPath(); ctx.arc(6.2, -7.4, 5.6, Math.PI*1.02, Math.PI*2.06); ctx.fill();
+  ctx.fillStyle="#e64545";
+  ctx.beginPath(); ctx.arc(6.2, -7.8, 4.6, Math.PI*1.05, Math.PI*1.98); ctx.fill();
+  const tw = Math.sin(p.animT*0.5)*1.6;
+  ctx.fillStyle="#b32424";
+  ctx.fillRect(3.2, -10.6 + tw, 5.4, 2);
+  ctx.fillRect(1.4, -9.2 + tw, 4.2, 1.8);
+  // 枪（抱在身侧）
+  ctx.save(); ctx.rotate(-0.35);
+  paintGun(1, -8.6, 0, 8);
+  ctx.restore();
+  ctx.restore();
+}
 function drawPlayerSlide(){
   const p = player;
   if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return;
@@ -2229,116 +2320,285 @@ function drawSoldier(e){
   if(e.kind==="cam"){ drawCam(e, x, y); return; }
   // ----- 工事类 -----
   if(e.kind==="fort"){
+    const dir = (player.x + player.w/2 > e.x + e.w/2) ? 1 : -1;
     if(e.mode==="trencher"){
-      // 战壕：深沟 + 沙袋垒边
-      ctx.fillStyle="#1a2416"; ctx.fillRect(x, y-4, e.w, 16);           // 沟体
-      ctx.fillStyle="#2c3626"; ctx.fillRect(x+4, y-2, e.w-8, 12);       // 沟内阴影
-      ctx.fillStyle="#6b6248";
-      for(let sx=0; sx<e.w; sx+=16){ ctx.fillRect(x+sx, y-8, 14, 8); }  // 沙袋
-      ctx.fillStyle="#7a7054";
-      for(let sx=0; sx<e.w; sx+=16){ ctx.fillRect(x+sx, y-8, 14, 3); }
-      if(e.up>0){
-        // 士兵抬头（前 20 帧升起、后 20 帧蹲回）
-        const rise = Math.min(1, Math.min(e.up, 120-e.up)/20);
-        const sy = y - rise*26;
-        ctx.fillStyle="#4d5c34"; ctx.fillRect(x+14, sy+12, 20, 11);      // 肩背
-        ctx.fillStyle="#62743f"; ctx.fillRect(x+14, sy+12, 20, 2);
-        ctx.fillStyle="#2f3a23"; ctx.fillRect(x+16, sy+15, 16, 6);      // 背心
-        ctx.fillStyle="#c9a17a"; ctx.fillRect(x+18, sy+2, 12, 10);      // 脸
-        ctx.fillStyle="#b08a63"; ctx.fillRect(x+28, sy+4, 2, 7);
-        ctx.fillStyle="#3a4526";                                        // 钢盔
-        ctx.beginPath(); ctx.arc(x+24, sy+2.6, 8, Math.PI, 0); ctx.fill();
-        ctx.fillRect(x+15.5, sy+2, 17, 2.4);
-        ctx.fillStyle="#2b351c"; ctx.fillRect(x+15, sy+4.2, 18, 1.6);   // 盔檐
-        ctx.fillStyle="#1c1f18"; ctx.fillRect(x+25, sy+5.6, 3, 2);      // 眼
-        ctx.fillStyle="#1c1f22"; ctx.fillRect(x+28, sy+9, 16, 3.2);     // 枪
-        ctx.fillStyle="#2f353b"; ctx.fillRect(x+28, sy+9, 16, 1.2);
-        ctx.fillStyle="#14171a"; ctx.fillRect(x+42, sy+8.4, 4, 2.2);
+      // ===== 战壕兵：沙袋垒成的掩体，士兵永远露着钢盔，开火时整个上身探出来 =====
+      const rise = e.up>0 ? Math.min(1, Math.min(e.up, 118-e.up)/18) : 0;
+      // 掩体后的战壕（两侧露出的暗沟）
+      ctx.fillStyle="#141a12"; ctx.fillRect(x-12, y-4, e.w+24, 10);
+      ctx.fillStyle="#2a2318"; ctx.fillRect(x-12, y+3, e.w+24, 4);
+      // —— 士兵（先画，随后沙袋墙压在他身前）——
+      ctx.save();
+      ctx.translate(x + 26, y - 30 - rise*15);
+      ctx.scale(dir, 1);
+      ctx.fillStyle="#55663a"; ctx.fillRect(-9, 6, 18, 22);              // 上身
+      ctx.fillStyle="#4a5a32"; ctx.fillRect(-9, 6, 18, 3);
+      ctx.fillStyle="#2e3a22"; ctx.fillRect(-7, 10, 14, 10);             // 防弹背心
+      ctx.fillStyle="#3c4a28"; ctx.fillRect(-6, 12, 12, 2);
+      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5, -2, 11, 9);              // 脸
+      ctx.fillStyle="#b08a63"; ctx.fillRect(4, 0, 2.4, 6);
+      ctx.fillStyle="#3d4a26";                                           // 钢盔
+      ctx.beginPath(); ctx.arc(0, -1, 8.6, Math.PI, 0); ctx.fill();
+      ctx.fillRect(-9.4, -2, 19, 3);
+      ctx.fillStyle="#2a3319"; ctx.fillRect(-9.6, 1, 19.6, 2.2);         // 盔檐
+      ctx.fillStyle="#1c1f18"; ctx.fillRect(1, 3.4, 4.4, 2.4);           // 眼
+      ctx.fillStyle="#8fa08c"; ctx.fillRect(1, 3.4, 2, 2.4);             // 护目镜反光
+      ctx.restore();
+      // —— 沙袋墙（两排错缝，压住士兵下半身）——
+      const bag=(bx,by,bw,bh,col)=>{
+        ctx.fillStyle=col;
+        ctx.beginPath();
+        ctx.moveTo(bx+3.5,by); ctx.lineTo(bx+bw-3.5,by);
+        ctx.quadraticCurveTo(bx+bw, by+bh*0.5, bx+bw-3.5, by+bh);
+        ctx.lineTo(bx+3.5, by+bh);
+        ctx.quadraticCurveTo(bx, by+bh*0.5, bx+3.5, by);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle="rgba(0,0,0,.20)"; ctx.fillRect(bx+4, by+bh-2.2, bw-8, 2.2);
+        ctx.fillStyle="rgba(255,255,255,.10)"; ctx.fillRect(bx+4, by+1, bw-8, 1.6);
+      };
+      for(let i=0;i<4;i++) bag(x-6+i*14.5, y-12, 14.5, 9, "#7b7154");
+      for(let i=0;i<4;i++) bag(x-13+i*14.5, y-21, 14.5, 9.4, "#8b8163");
+      bag(x-16, y-29, 15, 9, "#94896c"); bag(x+e.w-2, y-29, 15, 9, "#94896c");
+      // 弹药箱 + 铁锹
+      ctx.fillStyle="#4a5a2e"; ctx.fillRect(x+e.w-4, y-40, 15, 11);
+      ctx.fillStyle="#6b7f45"; ctx.fillRect(x+e.w-4, y-40, 15, 3);
+      ctx.fillStyle="#2d3a1c"; ctx.fillRect(x+e.w+2, y-38, 2, 7);
+      // —— 架在沙袋上的步枪 + 枪口焰 ——
+      ctx.save();
+      ctx.translate(x + 26, y - 30 - rise*15);
+      ctx.scale(dir, 1);
+      ctx.fillStyle="#20242a"; ctx.fillRect(6, 7, 24, 3.6);              // 枪身
+      ctx.fillStyle="#3a424b"; ctx.fillRect(6, 7, 24, 1.2);
+      ctx.fillStyle="#14171a"; ctx.fillRect(28, 6.2, 6, 2.4);            // 枪口
+      const firing = e.up>0 && ((e.up>96 && e.up<112) || (e.up>56 && e.up<72));
+      if(firing){
+        ctx.fillStyle="#ffe86b"; ctx.globalAlpha=.95;
+        ctx.beginPath(); ctx.moveTo(33,4); ctx.lineTo(43+Math.random()*5,7.6); ctx.lineTo(33,11);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle="#fff6c8"; ctx.fillRect(33, 6.4, 5, 3);
+        ctx.globalAlpha=1;
       }
+      ctx.restore();
       return;
     }
     if(e.mode==="tower"){
-      // 高塔：木架 + 顶部平台
-      ctx.fillStyle="#5b4630";
-      ctx.fillRect(x+4, y-150, 7, 150); ctx.fillRect(x+e.w-11, y-150, 7, 150);  // 双腿
-      ctx.strokeStyle="#5b4630"; ctx.lineWidth=5;
+      // ===== 高塔狙击：木制瞭望塔 + 平台 + 探照灯 + 端长枪的狙击手 =====
+      const topY = y - 150;
+      // 塔身阴影
+      ctx.fillStyle="rgba(0,0,0,.22)";
+      ctx.beginPath(); ctx.ellipse(x+e.w/2, y+2, 34, 6, 0, 0, 7); ctx.fill();
+      // 后腿
+      ctx.fillStyle="#3f2f1c";
+      ctx.fillRect(x-1, topY+6, 6, y-topY-6); ctx.fillRect(x+e.w-5, topY+6, 6, y-topY-6);
+      // 交叉剪刀撑
+      ctx.strokeStyle="#5b4630"; ctx.lineWidth=4.5; ctx.lineCap="butt";
       ctx.beginPath();
-      ctx.moveTo(x+6, y-20); ctx.lineTo(x+e.w-8, y-90);
-      ctx.moveTo(x+e.w-8, y-20); ctx.lineTo(x+6, y-90);
+      ctx.moveTo(x+4, y-16); ctx.lineTo(x+e.w-4, y-104);
+      ctx.moveTo(x+e.w-4, y-16); ctx.lineTo(x+4, y-104);
+      ctx.moveTo(x+4, y-86); ctx.lineTo(x+e.w-4, y-160);
       ctx.stroke();
-      ctx.fillStyle="#7d5f3f"; ctx.fillRect(x-4, y-154, e.w+8, 10);     // 平台
-      ctx.fillStyle="#3e2f1f"; ctx.fillRect(x-4, y-146, e.w+8, 4);
-      // 塔顶狙击手
-      const dir = (player.x > e.x) ? 1 : -1;
-      ctx.save(); ctx.translate(x+e.w/2, y-154); ctx.scale(dir,1);
-      ctx.fillStyle="#5a6a3a"; ctx.fillRect(-8,-22,16,16);
-      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5,-30,10,8);
-      ctx.fillStyle="#3d4a26"; ctx.fillRect(-7,-34,14,4);
-      ctx.fillStyle="#333";    ctx.fillRect(6,-26,20,3);
-      if(e.cd>128 && e.cd<136){ ctx.fillStyle="#ffe86b"; ctx.fillRect(26,-27,6,5); } // 枪口焰
+      ctx.strokeStyle="#382a19"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(x+6, y-150); ctx.lineTo(x+e.w-6, y-150); ctx.stroke();
+      // 前腿
+      ctx.fillStyle="#6b5236";
+      ctx.fillRect(x+5, topY+4, 7, y-topY-4); ctx.fillRect(x+e.w-12, topY+4, 7, y-topY-4);
+      ctx.fillStyle="#8a6b47";
+      ctx.fillRect(x+5, topY+4, 2.4, y-topY-4); ctx.fillRect(x+e.w-12, topY+4, 2.4, y-topY-4);
+      // 爬梯
+      ctx.strokeStyle="#7d5f3f"; ctx.lineWidth=2.4;
+      ctx.beginPath();
+      ctx.moveTo(x+e.w-4, y-2); ctx.lineTo(x+e.w-4, topY+8);
+      ctx.moveTo(x+e.w+4, y-2); ctx.lineTo(x+e.w+4, topY+8);
+      ctx.stroke();
+      ctx.lineWidth=1.8; ctx.strokeStyle="#5b4630";
+      for(let ly=y-10; ly>topY+8; ly-=11){ ctx.beginPath(); ctx.moveTo(x+e.w-4, ly); ctx.lineTo(x+e.w+4, ly); ctx.stroke(); }
+      // 探照灯（往主角方向扫）
+      const lampA = Math.atan2(chestY() - (y-108), (player.x+player.w/2) - (x+e.w-16));
+      ctx.save(); ctx.translate(x+e.w-16, y-108); ctx.rotate(lampA);
+      ctx.globalAlpha=.10; ctx.fillStyle="#ffeaa0";
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(210,-46); ctx.lineTo(210,46); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha=1;
+      ctx.fillStyle="#3b3b40"; ctx.fillRect(-5,-7,12,14);
+      ctx.fillStyle="#ffeaa0"; ctx.fillRect(6,-5,4,10);
       ctx.restore();
+      // 平台
+      ctx.fillStyle="#8a6a45"; ctx.fillRect(x-9, topY-6, e.w+18, 9);
+      ctx.fillStyle="#a8845a"; ctx.fillRect(x-9, topY-6, e.w+18, 2.6);
+      ctx.fillStyle="#3e2f1f"; ctx.fillRect(x-9, topY+3, e.w+18, 4);
+      // 平台护栏（朝主角一侧留射击缺口）
+      ctx.fillStyle="#6b5236";
+      ctx.fillRect(x-9, topY-20, 3, 15); ctx.fillRect(x+e.w+4, topY-20, 3, 15);
+      ctx.fillRect(x-9, topY-20, e.w+18, 2.4);
+      // 沙袋垫在前沿
+      ctx.fillStyle="#8b8163"; ctx.fillRect(x-6, topY-13, 13, 7);
+      ctx.fillStyle="#7b7154"; ctx.fillRect(x-6, topY-7, 13, 3);
+      // 狙击手（端带瞄准镜的长枪）
+      ctx.save(); ctx.translate(x+e.w/2-2, topY-6); ctx.scale(dir,1);
+      ctx.fillStyle="#55663a"; ctx.fillRect(-8, -24, 16, 19);          // 躯干
+      ctx.fillStyle="#4a5a32"; ctx.fillRect(-8, -24, 16, 3);
+      ctx.fillStyle="#2e3a22"; ctx.fillRect(-6, -20, 12, 9);           // 战术背心
+      ctx.fillStyle="#20477c"; ctx.fillRect(-8, -7, 7, 6);             // 一条腿
+      ctx.fillStyle="#15171c"; ctx.fillRect(0, -5, 9, 4);              // 靴
+      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5, -33, 11, 9);           // 脸
+      ctx.fillStyle="#3d4a26";                                         // 钢盔
+      ctx.beginPath(); ctx.arc(0.5, -32, 8, Math.PI, 0); ctx.fill();
+      ctx.fillRect(-8, -33, 17, 3);
+      ctx.fillStyle="#2a3319"; ctx.fillRect(-8.4, -30, 17.4, 2);
+      ctx.fillStyle="#8fa08c"; ctx.fillRect(-2, -29, 5, 2.4);          // 护目镜
+      ctx.fillStyle="#1c1f18"; ctx.fillRect(3, -28.6, 2, 2);
+      // 长枪
+      ctx.fillStyle="#20242a"; ctx.fillRect(2, -21, 30, 3.4);
+      ctx.fillStyle="#3a424b"; ctx.fillRect(2, -21, 30, 1.2);
+      ctx.fillStyle="#14171a"; ctx.fillRect(28, -22, 7, 2.6);
+      ctx.fillStyle="#2a2f36"; ctx.fillRect(10, -24, 9, 3.2);          // 瞄准镜
+      ctx.fillStyle="#6ad0ff"; ctx.globalAlpha=.7; ctx.fillRect(18, -23.4, 2, 2);
+      ctx.globalAlpha=1;
+      if(e.cd>130 && e.cd<140){                                        // 枪口焰
+        ctx.fillStyle="#ffe86b";
+        ctx.beginPath(); ctx.moveTo(34,-23); ctx.lineTo(44+Math.random()*4,-20); ctx.lineTo(34,-17);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      // 塔顶警示灯
+      ctx.fillStyle = (Math.floor((e.t||0)/18)%2) ? "#ff5b3d" : "#5a1a10";
+      ctx.beginPath(); ctx.arc(x+e.w/2, topY-24, 3, 0, 7); ctx.fill();
       return;
     }
-    // camper：草丛伏兵
-    ctx.fillStyle="#2e5a2a";
-    for(let b=0;b<6;b++){
-      const bx = x + b*7 + (b%2)*3;
+    // ===== camper：草丛伏兵（草堆里露着钢盔和枪口）=====
+    const sway = Math.sin((e.t||0)*0.07);
+    // 地面草影
+    ctx.fillStyle="rgba(0,0,0,.18)";
+    ctx.beginPath(); ctx.ellipse(x+e.w/2, y+1, e.w*0.62, 5, 0, 0, 7); ctx.fill();
+    // 后层草（深绿）
+    ctx.fillStyle="#20401f";
+    for(let b=0;b<7;b++){
+      const bx = x - 4 + b*6.4;
       ctx.beginPath();
-      ctx.moveTo(bx, y); ctx.quadraticCurveTo(bx+3, y-16-(b%3)*4, bx+6, y);
+      ctx.moveTo(bx, y+1);
+      ctx.quadraticCurveTo(bx+3+sway, y-16-(b%3)*5, bx+7+sway*1.4, y-2-(b%2)*4);
+      ctx.lineTo(bx+4, y+1); ctx.closePath(); ctx.fill();
+    }
+    // 草丛里的暗洞（伏兵藏身处）
+    ctx.fillStyle="#122410";
+    ctx.beginPath(); ctx.ellipse(x+e.w/2, y-9, 13, 9, 0, 0, 7); ctx.fill();
+    // 士兵（未现身时只露钢盔 + 护目镜反光）
+    ctx.save();
+    ctx.translate(x + e.w/2, y - 12);
+    ctx.scale(dir, 1);
+    if(e.revealed){
+      ctx.fillStyle="#55663a"; ctx.fillRect(-9, -16, 18, 20);            // 上身
+      ctx.fillStyle="#2e3a22"; ctx.fillRect(-7, -12, 14, 9);             // 背心
+      ctx.fillStyle="#20477c"; ctx.fillRect(-9, 2, 8, 5);                // 跪腿
+      ctx.fillStyle="#15171c"; ctx.fillRect(1, 3, 9, 4);
+    }
+    // 钢盔（始终可见 → 草丛里能看出有人）
+    ctx.fillStyle="#3d4a26";
+    ctx.beginPath(); ctx.arc(0, e.revealed?-14:-8, 8.4, Math.PI, 0); ctx.fill();
+    ctx.fillRect(-8.6, e.revealed?-15:-9, 17.4, 3);
+    ctx.fillStyle="#2a3319"; ctx.fillRect(-8.8, e.revealed?-12:-6, 17.8, 2);
+    // 脸/护目镜
+    ctx.fillStyle="#c9a17a"; ctx.fillRect(-4, e.revealed?-11:-5, 9, 5);
+    ctx.fillStyle="#8fa08c"; ctx.fillRect(-1, e.revealed?-10:-4, 5, 2.2);
+    ctx.fillStyle="#dff3e2"; ctx.globalAlpha=.85;
+    ctx.fillRect(-0.4, e.revealed?-10:-4, 1.6, 1.6); ctx.globalAlpha=1;
+    // 枪管从草里探出
+    ctx.fillStyle="#20242a"; ctx.fillRect(4, e.revealed?-13:-7, 20, 3);
+    ctx.fillStyle="#14171a"; ctx.fillRect(21, e.revealed?-13.6:-7.6, 5, 2.2);
+    if(e.revealed && e.cd>100 && e.cd<112){
+      ctx.fillStyle="#ffe86b";
+      ctx.beginPath(); ctx.moveTo(25,-11); ctx.lineTo(34+Math.random()*4,-8); ctx.lineTo(25,-5);
       ctx.closePath(); ctx.fill();
     }
-    if(e.revealed){
-      // 现身：单膝跪地射击姿态
-      const dir = (player.x > e.x) ? 1 : -1;
-      ctx.save(); ctx.translate(x+e.w/2, y); ctx.scale(dir,1);
-      ctx.fillStyle="#5a6a3a"; ctx.fillRect(-9,-16,18,14);              // 躯干
-      ctx.fillStyle="#c9a17a"; ctx.fillRect(-5,-26,10,9);               // 头
-      ctx.fillStyle="#3d4a26"; ctx.fillRect(-7,-30,14,4);               // 头盔
-      ctx.fillStyle="#3d4a26"; ctx.fillRect(-9,-2,8,4);                 // 跪腿
-      ctx.fillStyle="#333";    ctx.fillRect(6,-14,20,3);                // 枪
-      ctx.restore();
+    ctx.restore();
+    // 前层草叶（遮住士兵下半身，制造"藏在草里"的层次）
+    ctx.fillStyle="#2e5a2a";
+    for(let b=0;b<8;b++){
+      const bx = x - 5 + b*5.6;
+      ctx.beginPath();
+      ctx.moveTo(bx, y+2);
+      ctx.quadraticCurveTo(bx+2-sway, y-12-(b%3)*5, bx+6-sway, y-4-(b%2)*3);
+      ctx.lineTo(bx+4, y+2); ctx.closePath(); ctx.fill();
+    }
+    // 高光叶片
+    ctx.fillStyle="#4a7d38";
+    for(let b=0;b<5;b++){
+      const bx = x - 2 + b*8;
+      ctx.beginPath();
+      ctx.moveTo(bx, y+1);
+      ctx.quadraticCurveTo(bx+2, y-13-(b%2)*4, bx+4, y-6);
+      ctx.lineTo(bx+2.4, y+1); ctx.closePath(); ctx.fill();
     }
     return;
   }
   if(e.kind==="turret"){
-    // 固定炮台：三脚底座 + 可旋转炮塔 + 长炮管（特殊炮台为青色）
-    const cx = x + e.w/2, cy = y + 21, sp = e.sp;
+    // 固定炮台：三脚底座 + 可旋转炮塔（平滑转头）+ 长炮管（特殊炮台为青色）
+    const cx = x + e.w/2, cy = y + 19, sp = e.sp;
     const c1 = sp ? "#1d6a68" : "#3a3f4a",
           c2 = sp ? "#3aa8a0" : "#5a6370",
-          c3 = sp ? "#124b48" : "#232830";
+          c3 = sp ? "#124b48" : "#232830",
+          c4 = sp ? "#7ff0e4" : "#8894a4";
+    const ang = e.gunA===undefined
+      ? Math.atan2(chestY() - cy, (player.x+player.w/2) - cx) : e.gunA;
+    const kick = e.kick || 0;
     ctx.globalAlpha=.3; ctx.fillStyle="#000";
     ctx.beginPath(); ctx.ellipse(cx, y+e.h+1, 24, 5, 0, 0, 7); ctx.fill(); ctx.globalAlpha=1;
-    // 三脚支架
+    // 三脚支架（外撇三条腿 + 横撑）
     ctx.fillStyle=c3;
     ctx.beginPath();
     ctx.moveTo(cx-4, cy+2); ctx.lineTo(cx+4, cy+2);
     ctx.lineTo(cx+22, y+e.h); ctx.lineTo(cx+12, y+e.h);
     ctx.lineTo(cx, cy+11); ctx.lineTo(cx-12, y+e.h); ctx.lineTo(cx-22, y+e.h);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle=c1; ctx.fillRect(cx-3, cy+2, 6, 15);
-    // 圆盘底座
+    ctx.fillStyle=c1;
+    ctx.fillRect(cx-19, y+e.h-9, 12, 3); ctx.fillRect(cx+8, y+e.h-9, 12, 3);
+    ctx.fillStyle=c4; ctx.globalAlpha=.5;
+    ctx.fillRect(cx-19, y+e.h-9, 12, 1); ctx.fillRect(cx+8, y+e.h-9, 12, 1);
+    ctx.globalAlpha=1;
+    ctx.fillStyle=c1; ctx.fillRect(cx-3, cy+2, 6, 15);      // 立柱
+    // 底座转盘（带一圈随转动变化的刻度，能看出它在转）
+    ctx.fillStyle=c3; ctx.beginPath(); ctx.ellipse(cx, cy+5, 17, 6.4, 0, 0, 7); ctx.fill();
     ctx.fillStyle=c1; ctx.beginPath(); ctx.ellipse(cx, cy+3, 16, 6.2, 0, 0, 7); ctx.fill();
     ctx.fillStyle=c2; ctx.beginPath(); ctx.ellipse(cx, cy+2, 16, 4.6, 0, 0, 7); ctx.fill();
-    // 炮管（实时跟随主角）
-    const ang = Math.atan2(chestY() - (cy-2), (player.x+player.w/2) - cx);
+    ctx.fillStyle=c3;
+    for(let k=0;k<8;k++){
+      const a2 = ang + k*Math.PI/4;
+      ctx.fillRect(cx + Math.cos(a2)*12 - 1, cy+2 + Math.sin(a2)*3.4 - 1, 2.4, 2.4);
+    }
+    // 炮管（随 gunA 平滑转向，开火有后座）
     ctx.save(); ctx.translate(cx, cy-2); ctx.rotate(ang);
+    ctx.translate(-kick*1.6, 0);
     ctx.fillStyle=c3; ctx.fillRect(0, -5, 26, 10);
     ctx.fillStyle=c2; ctx.fillRect(0, -5, 26, 2.6);
+    ctx.fillStyle=c1; ctx.fillRect(0, 2.4, 26, 2.2);
     ctx.fillStyle="#101418"; ctx.fillRect(25, -6.5, 8, 13);      // 炮口制退器
     ctx.fillStyle="#000"; ctx.fillRect(31, -3, 3, 6);
+    ctx.fillStyle=c4; ctx.fillRect(6, -7.2, 3, 2);               // 炮管箍
+    if(kick>2){                                                  // 炮口焰
+      ctx.globalAlpha=.9; ctx.fillStyle="#ffe58a";
+      ctx.beginPath(); ctx.moveTo(34,-5); ctx.lineTo(36+Math.random()*9,0); ctx.lineTo(34,5);
+      ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
+    }
     ctx.restore();
-    // 转塔（半圆罩）
+    // 转塔（半圆罩 + 观察窗）
     ctx.fillStyle=c1; ctx.beginPath(); ctx.arc(cx, cy-2, 14, Math.PI, 0); ctx.fill();
     ctx.fillRect(cx-14, cy-3, 28, 7);
     ctx.fillStyle=c2; ctx.beginPath(); ctx.arc(cx, cy-3, 11, Math.PI, 0); ctx.fill();
-    // 侧面弹药箱
-    ctx.fillStyle="#2c333b"; ctx.fillRect(cx+10, cy+5, 11, 9);
-    ctx.fillStyle=c2; ctx.fillRect(cx+10, cy+5, 11, 2);
+    ctx.fillStyle=c3; ctx.beginPath(); ctx.arc(cx, cy-3, 11, Math.PI, 0);
+    ctx.arc(cx, cy-3, 8.4, 0, Math.PI, true); ctx.fill();
+    // 观察窗（朝炮管方向的一小块玻璃）
+    ctx.fillStyle="#8ad8ff"; ctx.globalAlpha=.75;
+    ctx.fillRect(cx + Math.cos(ang)*6 - 2.2, cy - 9 + Math.sin(ang)*2, 4.4, 3);
+    ctx.globalAlpha=1;
+    // 侧面弹药箱 + 弹链
+    ctx.fillStyle="#2c333b"; ctx.fillRect(cx+10, cy+6, 11, 9);
+    ctx.fillStyle=c2; ctx.fillRect(cx+10, cy+6, 11, 2);
+    ctx.fillStyle="#8a7a4a";
+    for(let k=0;k<3;k++) ctx.fillRect(cx+12+k*3, cy+10, 2, 3);
     // 状态灯
     if(!e.dead){
       const blink = Math.floor(t/15)%2===0;
       ctx.fillStyle = sp ? (blink?"#5afff0":"#1a8a80") : (blink?"#ff5b3d":"#802a1a");
-      ctx.fillRect(cx-2, cy-13, 4, 4);
+      ctx.fillRect(cx-2, cy-14, 4, 4);
     }
     return;
   }
@@ -2407,172 +2667,468 @@ function drawReactor(){
   const b = boss, wx = b.wallX - cam;
   if(wx > W + 260) return;
   const wallW = W + 320;
-  // 基地后方巨型墙体
-  ctx.fillStyle="#2a3038"; ctx.fillRect(wx, 0, wallW, GROUND_Y);
-  ctx.fillStyle="#22282f";
-  for(let wy=0; wy<GROUND_Y; wy+=46) ctx.fillRect(wx, wy, wallW, 4);
-  // 竖梁与管线
-  ctx.fillStyle="#1a2027";
-  for(let px=wx+30; px<wx+wallW; px+=120) ctx.fillRect(px, 0, 14, GROUND_Y);
-  ctx.fillStyle="#333c47";
-  for(let px=wx+60; px<wx+wallW; px+=120){
-    ctx.fillRect(px, 0, 8, GROUND_Y);
-    for(let py=40; py<GROUND_Y; py+=90) ctx.fillRect(px-8, py, 24, 8);
+  const core = b.core, cx = core.x - cam, cy = core.y;
+
+  // ================= 基地墙体（重工业机房） =================
+  ctx.fillStyle="#242b33"; ctx.fillRect(wx, 0, wallW, GROUND_Y);
+  // 墙板分块
+  for(let sy=0; sy<GROUND_Y; sy+=58){
+    ctx.fillStyle = ((sy/58)|0)%2 ? "#2a323b" : "#212831";
+    ctx.fillRect(wx, sy, wallW, 56);
+    ctx.fillStyle="rgba(0,0,0,.35)"; ctx.fillRect(wx, sy+54, wallW, 4);
   }
+  // 竖向工字钢
+  for(let px=wx+26; px<wx+wallW; px+=116){
+    ctx.fillStyle="#171d23"; ctx.fillRect(px, 0, 16, GROUND_Y);
+    ctx.fillStyle="#39424d"; ctx.fillRect(px+3, 0, 4, GROUND_Y);
+    ctx.fillStyle="#39424d"; ctx.fillRect(px+11, 0, 3, GROUND_Y);
+    // 柱脚
+    ctx.fillStyle="#151a1f"; ctx.fillRect(px-4, GROUND_Y-16, 24, 16);
+  }
+  // 横向桁架
+  ctx.fillStyle="#2f3842"; ctx.fillRect(wx, 96, wallW, 10);
+  ctx.fillStyle="#3d4855"; ctx.fillRect(wx, 96, wallW, 3);
+  ctx.fillStyle="#2f3842"; ctx.fillRect(wx, 330, wallW, 10);
+  ctx.fillStyle="#3d4855"; ctx.fillRect(wx, 330, wallW, 3);
+  // 冷却管线（带流动光点）
+  const pipeY = 148;
+  ctx.fillStyle="#3c4854"; ctx.fillRect(wx, pipeY, wallW, 14);
+  ctx.fillStyle="#54626f"; ctx.fillRect(wx, pipeY, wallW, 4);
+  ctx.fillStyle="#232b33";
+  for(let px=wx+30; px<wx+wallW; px+=88) ctx.fillRect(px, pipeY-4, 10, 22);   // 法兰
+  ctx.fillStyle="#7fe6ff";
+  for(let k=0;k<16;k++){
+    const px = wx + ((perfNow/16 + k*72) % wallW);
+    ctx.globalAlpha = .55; ctx.fillRect(px, pipeY+6, 14, 2.4); ctx.globalAlpha = 1;
+  }
+  // 上层电缆桥架
+  ctx.fillStyle="#1b2127"; ctx.fillRect(wx, 62, wallW, 8);
+  ctx.strokeStyle="#39434f"; ctx.lineWidth=2;
+  for(let px=wx+12; px<wx+wallW; px+=34){
+    ctx.beginPath(); ctx.moveTo(px+6, 70); ctx.quadraticCurveTo(px+16, 82, px+26, 70); ctx.stroke();
+  }
+  // 地面格栅
+  ctx.fillStyle="#1b2026"; ctx.fillRect(wx, GROUND_Y-12, wallW, 12);
+  ctx.fillStyle="#333d47";
+  for(let px=wx; px<wx+wallW; px+=18) ctx.fillRect(px, GROUND_Y-12, 8, 12);
+  // 警示斜条（墙根）
+  ctx.save(); ctx.beginPath(); ctx.rect(wx, GROUND_Y-30, wallW, 12); ctx.clip();
+  ctx.fillStyle="#d8b23c"; ctx.fillRect(wx, GROUND_Y-30, wallW, 12);
+  ctx.fillStyle="#1d2126";
+  for(let s=0; s<wallW; s+=24){
+    ctx.beginPath(); ctx.moveTo(wx+s, GROUND_Y-18); ctx.lineTo(wx+s+9, GROUND_Y-30);
+    ctx.lineTo(wx+s+18, GROUND_Y-30); ctx.lineTo(wx+s+9, GROUND_Y-18); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
   // 顶部警示排灯
-  for(let px=wx+20; px<wx+wallW; px+=64){
-    const on = Math.floor((perfNow/380) + px/64) % 2 === 0;
+  for(let px=wx+18; px<wx+wallW; px+=62){
+    const on = Math.floor((perfNow/340) + px/62) % 2 === 0;
     ctx.fillStyle = on ? "#ff3b1f" : "#4a1004";
-    ctx.fillRect(px, 18, 12, 7);
+    ctx.fillRect(px, 14, 11, 7);
+  }
+  // 压力表 / 铭牌
+  for(let k=0;k<4;k++){
+    const px = wx + 210 + k*74, py = 200;
+    ctx.fillStyle="#39424c"; ctx.beginPath(); ctx.arc(px, py, 11, 0, 7); ctx.fill();
+    ctx.fillStyle="#c9d6e2"; ctx.beginPath(); ctx.arc(px, py, 8, 0, 7); ctx.fill();
+    ctx.strokeStyle="#8d3d2a"; ctx.lineWidth=1.6;
+    ctx.beginPath(); ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(perfNow/500 + k)*6, py + Math.sin(perfNow/500 + k)*6); ctx.stroke();
   }
 
-  // ---- 核心（六边形反应堆）----
-  const c = b.core, cx = c.x - cam, cy = c.y;
-  ctx.fillStyle="#141a20"; ctx.fillRect(cx-14, cy-14, c.w+28, c.h+28);
-  ctx.fillStyle="#39424e"; ctx.fillRect(cx-8, cy-8, c.w+16, c.h+16);
-  if(!c.dead){
-    const pulse = .55 + .45*Math.abs(Math.sin(perfNow/260));
-    // 反应堆外壳
-    ctx.fillStyle="#4a5563";
+  // ================= 反应堆核心 =================
+  // 防护外框
+  ctx.fillStyle="#151a20"; ctx.fillRect(cx-30, cy-30, core.w+60, core.h+60);
+  ctx.fillStyle="#333d48"; ctx.fillRect(cx-24, cy-24, core.w+48, core.h+48);
+  ctx.fillStyle="#1e252c"; ctx.fillRect(cx-16, cy-16, core.w+32, core.h+32);
+  // 四角液压夹钳
+  for(let k=0;k<4;k++){
+    const qx = k%2 ? cx+core.w+16 : cx-16, qy = k<2 ? cy-16 : cy+core.h+16;
+    ctx.fillStyle="#4a5561"; ctx.fillRect(qx-10, qy-10, 20, 20);
+    ctx.fillStyle="#697585"; ctx.fillRect(qx-7, qy-7, 14, 6);
+    ctx.fillStyle="#2b333c"; ctx.fillRect(qx-3, qy+2, 6, 8);
+  }
+  if(!core.dead){
+    const pulse = .55 + .45*Math.abs(Math.sin(perfNow/240));
+    // 六边形外壳
+    ctx.fillStyle="#4e5b6a";
     ctx.beginPath();
-    ctx.moveTo(cx+c.w/2, cy-10); ctx.lineTo(cx+c.w+6, cy+c.h*0.25);
-    ctx.lineTo(cx+c.w+6, cy+c.h*0.75); ctx.lineTo(cx+c.w/2, cy+c.h+10);
-    ctx.lineTo(cx-6, cy+c.h*0.75); ctx.lineTo(cx-6, cy+c.h*0.25);
+    ctx.moveTo(cx+core.w/2, cy-12); ctx.lineTo(cx+core.w+8, cy+core.h*0.25);
+    ctx.lineTo(cx+core.w+8, cy+core.h*0.75); ctx.lineTo(cx+core.w/2, cy+core.h+12);
+    ctx.lineTo(cx-8, cy+core.h*0.75); ctx.lineTo(cx-8, cy+core.h*0.25);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle="#38424e";
+    ctx.beginPath();
+    ctx.moveTo(cx+core.w/2, cy-4); ctx.lineTo(cx+core.w-2, cy+core.h*0.3);
+    ctx.lineTo(cx+core.w-2, cy+core.h*0.7); ctx.lineTo(cx+core.w/2, cy+core.h+4);
+    ctx.lineTo(cx+2, cy+core.h*0.7); ctx.lineTo(cx+2, cy+core.h*0.3);
     ctx.closePath(); ctx.fill();
     // 内部能量
-    const eg = ctx.createRadialGradient(cx+c.w/2, cy+c.h/2, 6, cx+c.w/2, cy+c.h/2, c.h*0.62);
+    const eg = ctx.createRadialGradient(cx+core.w/2, cy+core.h/2, 6, cx+core.w/2, cy+core.h/2, core.h*0.62);
     eg.addColorStop(0, "#fffbe0");
-    eg.addColorStop(.45, c.shielded ? "#5afff0" : "#ffb347");
-    eg.addColorStop(1, c.shielded ? "#1a5a66" : "#7a1a04");
+    eg.addColorStop(.42, core.shielded ? "#7dfff2" : "#ffb347");
+    eg.addColorStop(1, core.shielded ? "#0e4a52" : "#6e1603");
     ctx.fillStyle = eg;
-    ctx.fillRect(cx, cy, c.w, c.h);
+    ctx.fillRect(cx, cy, core.w, core.h);
     // 能量流动条纹
-    ctx.globalAlpha = .35; ctx.fillStyle="#ffffff";
-    for(let s=0; s<6; s++){
-      const sy = cy + ((perfNow/6 + s*22) % c.h);
-      ctx.fillRect(cx, sy, c.w, 2);
-    }
+    ctx.globalAlpha = .34; ctx.fillStyle="#ffffff";
+    for(let s=0; s<7; s++) ctx.fillRect(cx, cy + ((perfNow/5 + s*20) % core.h), core.w, 2);
     ctx.globalAlpha = 1;
-    // 护盾力场（两座炮舱未毁 → 核心无敌）
-    if(c.shielded){
-      ctx.globalAlpha = .22 + .16*pulse;
+    // 中心转子 + 十字筋
+    ctx.save(); ctx.translate(cx+core.w/2, cy+core.h/2); ctx.rotate(perfNow/900);
+    ctx.strokeStyle="rgba(255,255,255,.30)"; ctx.lineWidth=3;
+    for(let k=0;k<6;k++){
+      ctx.beginPath(); ctx.moveTo(0,0);
+      ctx.lineTo(Math.cos(k*Math.PI/3)*core.w*0.46, Math.sin(k*Math.PI/3)*core.w*0.46);
+      ctx.stroke();
+    }
+    ctx.fillStyle="rgba(255,255,255,.55)";
+    ctx.beginPath(); ctx.arc(0, 0, 9 + pulse*3, 0, 7); ctx.fill();
+    ctx.restore();
+    // 护盾力场（炮舱未毁 → 核心无敌）
+    if(core.shielded){
+      const R = Math.max(core.w, core.h)*0.72;
+      ctx.globalAlpha = .20 + .16*pulse;
       ctx.strokeStyle="#5afff0"; ctx.lineWidth=4;
-      ctx.beginPath(); ctx.arc(cx+c.w/2, cy+c.h/2, c.h*0.78, 0, 7); ctx.stroke();
-      ctx.globalAlpha = .10 + .08*pulse; ctx.fillStyle="#5afff0";
-      ctx.beginPath(); ctx.arc(cx+c.w/2, cy+c.h/2, c.h*0.78, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx+core.w/2, cy+core.h/2, R, 0, 7); ctx.stroke();
+      ctx.globalAlpha = .09 + .07*pulse; ctx.fillStyle="#5afff0";
+      ctx.beginPath(); ctx.arc(cx+core.w/2, cy+core.h/2, R, 0, 7); ctx.fill();
       ctx.globalAlpha = 1;
       // 六边形网格
-      ctx.strokeStyle="rgba(120,255,245,.35)"; ctx.lineWidth=1;
-      for(let a=0; a<6; a++){
-        const ang = a*Math.PI/3 + perfNow/2600;
+      ctx.strokeStyle="rgba(120,255,245,.32)"; ctx.lineWidth=1;
+      for(let a=0; a<8; a++){
+        const ang = a*Math.PI/4 + perfNow/2800;
         ctx.beginPath();
-        ctx.moveTo(cx+c.w/2, cy+c.h/2);
-        ctx.lineTo(cx+c.w/2+Math.cos(ang)*c.h*0.78, cy+c.h/2+Math.sin(ang)*c.h*0.78);
+        ctx.moveTo(cx+core.w/2, cy+core.h/2);
+        ctx.lineTo(cx+core.w/2+Math.cos(ang)*R, cy+core.h/2+Math.sin(ang)*R);
         ctx.stroke();
+      }
+      // 护盾节点
+      for(let a=0; a<6; a++){
+        const ang = a*Math.PI/3 - perfNow/1800;
+        ctx.fillStyle="rgba(150,255,248,.8)";
+        ctx.beginPath();
+        ctx.arc(cx+core.w/2+Math.cos(ang)*R, cy+core.h/2+Math.sin(ang)*R, 3.2, 0, 7);
+        ctx.fill();
       }
     }
   } else {
     // 核心熔毁：破口透出稳定白光（第二关终点）
-    const dg = ctx.createLinearGradient(0, cy, 0, cy+c.h);
+    const dg = ctx.createLinearGradient(0, cy, 0, cy+core.h);
     dg.addColorStop(0,"#eaffff"); dg.addColorStop(1,"#ffd27a");
-    ctx.fillStyle=dg; ctx.fillRect(cx, cy, c.w, c.h);
+    ctx.fillStyle=dg; ctx.fillRect(cx, cy, core.w, core.h);
     ctx.globalAlpha = .3 + .15*Math.sin(perfNow/120);
-    ctx.fillStyle="#fff3a0"; ctx.fillRect(cx-30, cy-20, c.w+60, c.h+40);
+    ctx.fillStyle="#fff3a0"; ctx.fillRect(cx-34, cy-24, core.w+68, core.h+48);
     ctx.globalAlpha=1;
+    ctx.fillStyle="#101418";
+    ctx.beginPath(); ctx.moveTo(cx-8, cy+core.h*0.3); ctx.lineTo(cx+10, cy+core.h*0.16);
+    ctx.lineTo(cx+6, cy+core.h*0.44); ctx.closePath(); ctx.fill();
   }
 
-  // ---- 上下炮舱（旋转炮塔，可被摧毁解除护盾）----
+  // ================= 上下炮舱（旋转炮塔，打掉才能破盾） =================
   for(const g of b.cannons){
     const gx = g.x-cam + g.w/2, gy = g.y + g.h/2;
-    // 支架
-    ctx.strokeStyle="#2c343d"; ctx.lineWidth=8;
-    ctx.beginPath(); ctx.moveTo(gx+g.w*0.6, gy); ctx.lineTo(gx+g.w*0.6+30, gy); ctx.stroke();
-    // 炮舱圆壳
+    // 液压臂（连回墙体）
+    ctx.strokeStyle="#2c343d"; ctx.lineWidth=10; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(gx+g.w*0.5-2, gy); ctx.lineTo(gx+g.w*0.5+40, gy); ctx.stroke();
+    ctx.strokeStyle="#48525e"; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(gx+g.w*0.5-2, gy-2.5); ctx.lineTo(gx+g.w*0.5+40, gy-2.5); ctx.stroke();
+    ctx.lineCap="butt";
+    // 护罩
+    ctx.fillStyle = g.dead ? "#22272d" : "#2b333c";
+    ctx.beginPath(); ctx.arc(gx, gy, g.w/2+7, 0, 7); ctx.fill();
     ctx.fillStyle = g.dead ? "#2a2f36" : "#48525f";
     ctx.beginPath(); ctx.arc(gx, gy, g.w/2, 0, 7); ctx.fill();
     ctx.fillStyle = g.dead ? "#22262c" : "#5c6875";
     ctx.beginPath(); ctx.arc(gx, gy, g.w/2-7, 0, 7); ctx.fill();
     if(!g.dead){
-      // 八个炮口围绕（旋转）
-      ctx.fillStyle="#20262c";
+      // 八根炮管（旋转）
       for(let k=0;k<8;k++){
         const ang = b.t*0.045 + k*Math.PI/4;
         const ex = gx + Math.cos(ang)*(g.w/2-1), ey = gy + Math.sin(ang)*(g.w/2-1);
-        ctx.save(); ctx.translate(ex, ey); ctx.rotate(ang); ctx.fillRect(-9, -3.5, 12, 7); ctx.restore();
+        ctx.save(); ctx.translate(ex, ey); ctx.rotate(ang);
+        ctx.fillStyle="#1b2026"; ctx.fillRect(-10, -4, 14, 8);
+        ctx.fillStyle="#39434e"; ctx.fillRect(-10, -4, 14, 2.6);
+        ctx.fillStyle="#0b0e11"; ctx.fillRect(2, -3, 3, 6);
+        if((g.t % 120 < 3 || (g.t % 120 > 57 && g.t % 120 < 63))){
+          ctx.fillStyle="#ffe58a"; ctx.globalAlpha=.9;
+          ctx.beginPath(); ctx.moveTo(4,-4); ctx.lineTo(13,-1); ctx.lineTo(4,2); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha=1;
+        }
+        ctx.restore();
       }
-      // 中心红眼
-      ctx.fillStyle = (Math.floor(b.t/12)%2) ? "#ff5b3d" : "#7a1a10";
-      ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 7); ctx.fill();
+      // 中心红眼 + 装甲环
+      ctx.strokeStyle="#6d7a89"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(gx, gy, g.w/2-10, 0, 7); ctx.stroke();
+      const blink = (Math.floor(b.t/12)%2) ? "#ff5b3d" : "#7a1a10";
+      ctx.fillStyle="#20272e"; ctx.beginPath(); ctx.arc(gx, gy, 9, 0, 7); ctx.fill();
+      ctx.fillStyle=blink; ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 7); ctx.fill();
+      ctx.fillStyle="#ffe0c8"; ctx.beginPath(); ctx.arc(gx-1.6, gy-1.6, 2.2, 0, 7); ctx.fill();
     } else {
-      // 废炮舱：焦黑破口 + 冒烟
+      // 废炮舱：焦黑破口 + 冒烟 + 火星
       ctx.fillStyle="#0e0f12";
       ctx.beginPath(); ctx.arc(gx-3, gy+2, 9, 0, 7); ctx.fill();
-      ctx.globalAlpha = .3; ctx.fillStyle="#6a6a72";
-      ctx.beginPath(); ctx.arc(gx-6, gy-14-((perfNow/90)%14), 5, 0, 7); ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.fillStyle="#191c20";
+      ctx.beginPath(); ctx.moveTo(gx-11,gy-6); ctx.lineTo(gx+10,gy-11); ctx.lineTo(gx+6,gy+3); ctx.closePath(); ctx.fill();
+      for(let s=0;s<3;s++){
+        const t2 = (perfNow/75 + s*12) % 36;
+        ctx.globalAlpha = Math.max(0, .40 - t2*0.011);
+        ctx.fillStyle="#6a6a72";
+        ctx.beginPath(); ctx.arc(gx-6 + Math.sin(t2*0.3)*6, gy-16-t2*1.7, 5+t2*0.3, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha=1;
+      ctx.fillStyle="#ff7a3d"; ctx.beginPath(); ctx.arc(gx-4, gy+4, 2, 0, 7); ctx.fill();
     }
   }
 
   // ---- 血条 / 状态 ----
   if(!b.dead){
     const alive = b.cannons.filter(g=>!g.dead).length;
-    ctx.fillStyle="#000a"; ctx.fillRect(W/2-170, 24, 340, 18);
-    // 护盾期显示炮舱剩余进度，解除后显示核心血量
-    const ratio = c.shielded ? alive/2 : c.hp/c.maxHp;
-    ctx.fillStyle = c.shielded ? "#5afff0" : "#ff5b3d";
-    ctx.fillRect(W/2-168, 27, 336*Math.max(0, ratio), 13);
-    ctx.fillStyle="#fff"; ctx.font="12px monospace";
-    ctx.fillText(c.shielded ? "反应堆护盾力场 — 先摧毁炮舱 (" + (2-alive) + "/2)" : "反应堆核心", W/2-70, 56);
+    const bw = 360, bx = W/2-bw/2, by = 24;
+    ctx.fillStyle="#000a"; ctx.fillRect(bx-4, by-4, bw+8, 26);
+    ctx.fillStyle="#151a20"; ctx.fillRect(bx, by, bw, 18);
+    const ratio = core.shielded ? alive/2 : Math.max(0, core.hp/core.maxHp);
+    ctx.fillStyle = core.shielded ? "#5afff0" : (ratio > .35 ? "#ff5b3d" : "#ff2d1a");
+    ctx.fillRect(bx+2, by+2, (bw-4)*ratio, 14);
+    ctx.fillStyle="rgba(0,0,0,.45)";
+    for(let s=1;s<12;s++) ctx.fillRect(bx + (bw/12)*s, by+2, 2, 14);
+    ctx.fillStyle = core.shielded ? "#d8fffb" : "#ffd0b0";
+    ctx.fillRect(bx+2, by+2, (bw-4)*ratio, 3);
+    ctx.fillStyle="#fff"; ctx.font="bold 12px monospace"; ctx.textAlign="center";
+    ctx.fillText(core.shielded
+      ? "护 盾 力 场 — 先摧毁炮舱 (" + (2-alive) + "/2)"
+      : "反 应 堆 核 心", W/2, by+34);
+    ctx.textAlign="left";
   }
 }
 function drawBoss(){
   if(boss.kind === "reactor") return drawReactor();
   const b = boss, wx = b.wallX - cam;
   if(wx > W + 100) return;
-  // 要塞墙体
-  ctx.fillStyle="#4a4440";
-  ctx.fillRect(wx, 0, LEVEL_W - b.wallX + 300, GROUND_Y);
-  ctx.fillStyle="#3a3531";
-  for(let wy=0; wy<GROUND_Y; wy+=40) ctx.fillRect(wx, wy, LEVEL_W-b.wallX+300, 3);
-  // 铆钉
-  ctx.fillStyle="#5a544e";
-  for(let wy=20; wy<GROUND_Y; wy+=60)
-    for(let rx=wx+18; rx<wx+150; rx+=44) ctx.fillRect(rx, wy, 6, 6);
-  // 弱点核心（大门中央，闪烁）
-  const c = b.core, cx = c.x-cam;
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(cx-6, c.y-6, c.w+12, c.h+12);
-  if(!c.dead){
-    const blink = Math.floor(b.t/12)%2===0;
-    ctx.fillStyle = blink ? "#ff5b3d" : "#8a1a10";
-    ctx.fillRect(cx, c.y, c.w, c.h);
-    ctx.fillStyle = blink ? "#ffd0b0" : "#5a1a10";
-    ctx.beginPath(); ctx.arc(cx+c.w/2, c.y+c.h/2, 14, 0, 7); ctx.fill();
-  } else {
-    // 核心被摧毁：要塞大门敞开，透出通关之光
-    const dg = ctx.createLinearGradient(0, c.y, 0, c.y+c.h);
-    dg.addColorStop(0,"#fff8d0"); dg.addColorStop(1,"#ffb347");
-    ctx.fillStyle=dg; ctx.fillRect(cx, c.y, c.w, c.h);
-    ctx.globalAlpha = 0.22 + 0.1*Math.sin(perfNow/120);
-    ctx.fillStyle="#fff3a0"; ctx.fillRect(cx-24, c.y-18, c.w+48, c.h+36);
+  const wallW = LEVEL_W - b.wallX + 300;
+  const core = b.core, cx = core.x - cam, cy = core.y;
+  const dmg = 1 - core.hp/core.maxHp;
+
+  // ================= 要塞主体 =================
+  ctx.fillStyle="#3f3a36"; ctx.fillRect(wx, 0, wallW, GROUND_Y);
+  // 大块混凝土板（明暗错落 + 拼缝）
+  for(let sy=0; sy<GROUND_Y; sy+=76){
+    ctx.fillStyle = ((sy/76)|0)%2 ? "#463f3a" : "#3a3531";
+    ctx.fillRect(wx, sy, wallW, 74);
+    ctx.fillStyle="rgba(0,0,0,.30)"; ctx.fillRect(wx, sy+72, wallW, 4);
+  }
+  // 竖向拼缝
+  ctx.fillStyle="rgba(0,0,0,.18)";
+  for(let px=wx; px<wx+wallW; px+=96) ctx.fillRect(px, 0, 3, GROUND_Y);
+  // 横向装甲带（钢带 + 铆钉）
+  ctx.fillStyle="#565049"; ctx.fillRect(wx, 86, wallW, 12);
+  ctx.fillStyle="#6b645c"; ctx.fillRect(wx, 86, wallW, 3);
+  ctx.fillStyle="#565049"; ctx.fillRect(wx, 318, wallW, 12);
+  ctx.fillStyle="#6b645c"; ctx.fillRect(wx, 318, wallW, 3);
+  ctx.fillStyle="#8a8177";
+  for(let px=wx+14; px<wx+wallW; px+=36){
+    ctx.fillRect(px, 90, 5, 5); ctx.fillRect(px, 322, 5, 5);
+  }
+  // 通风百叶（左侧墙面细节）
+  for(let k=0;k<2;k++){
+    const vx = wx + 92 + k*54, vy = 150;
+    ctx.fillStyle="#23272b"; ctx.fillRect(vx, vy, 40, 46);
+    ctx.fillStyle="#4d565e";
+    for(let s=0;s<6;s++) ctx.fillRect(vx+3, vy+4+s*7, 34, 3.4);
+    ctx.fillStyle="#151a1d"; ctx.fillRect(vx-3, vy-4, 46, 5);
+  }
+  // 顶部探照灯 + 光锥（朝主角方向扫）
+  const lampX = wx + 44, lampY = 28;
+  const la = Math.atan2(chestY()-lampY, (player.x - cam + player.w/2) - lampX);
+  ctx.save(); ctx.translate(lampX, lampY); ctx.rotate(Math.max(0.55, Math.min(1.4, la)));
+  ctx.globalAlpha=.08; ctx.fillStyle="#ffeaa0";
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(340,-70); ctx.lineTo(340,90); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
+  ctx.fillStyle="#2b2f34"; ctx.fillRect(-8,-9,18,18);
+  ctx.fillStyle="#ffeaa0"; ctx.fillRect(8,-7,4,14);
+  ctx.restore();
+  // 顶部警示灯排
+  for(let px=wx+10; px<wx+wallW; px+=58){
+    const on = Math.floor((perfNow/400) + px/58) % 2 === 0;
+    ctx.fillStyle = on ? "#ff3b1f" : "#4a1004";
+    ctx.fillRect(px, 8, 10, 6);
+  }
+  // 铁蒺藜网（墙根）
+  ctx.strokeStyle="#6d6a63"; ctx.lineWidth=1.6;
+  for(let px=wx; px<wx+wallW; px+=34){
+    ctx.beginPath();
+    ctx.arc(px+12, GROUND_Y-14, 12, Math.PI*0.15, Math.PI*0.85, true);
+    ctx.stroke();
+  }
+
+  // ================= 中央大门（核心） =================
+  // 门洞（背后是黑）
+  ctx.fillStyle="#0c0e10"; ctx.fillRect(cx-6, cy-10, core.w+12, core.h+10);
+  // 门被摧毁后：门后透出通路光
+  if(core.dead){
+    const dg = ctx.createLinearGradient(0, cy, 0, cy+core.h);
+    dg.addColorStop(0,"#fffdf0"); dg.addColorStop(.5,"#ffe9a8"); dg.addColorStop(1,"#ffb347");
+    ctx.fillStyle=dg; ctx.fillRect(cx-2, cy-6, core.w+4, core.h+6);
+    ctx.globalAlpha = .30 + .12*Math.sin(perfNow/150);
+    ctx.fillStyle="#fff3a0"; ctx.fillRect(cx-30, cy-24, core.w+60, core.h+28);
     ctx.globalAlpha=1;
   }
-  // 上下两门火炮
-  for(const g of b.cannons){
-    const gx = g.x-cam, gy=g.y;
-    ctx.fillStyle = g.dead ? "#2f2f2f" : "#3a3f4a";
-    ctx.fillRect(gx, gy, g.w, g.h);
-    if(!g.dead){
-      ctx.fillStyle="#565e6e"; ctx.fillRect(gx+g.w-14, gy+4, 14, g.h-8);
-      ctx.fillStyle = (Math.floor(g.t/20)%2)?"#ff5b3d":"#5a1a10";
-      ctx.beginPath(); ctx.arc(gx+10, gy+g.h/2, 6, 0, 7); ctx.fill();
+  // 两扇钢制大门（核心毁坏后向两侧滑开）
+  const doorW = core.w/2, slide = core.dead ? doorW*0.95 : 0;
+  const door=(dx)=>{
+    ctx.fillStyle="#4b535c"; ctx.fillRect(dx, cy, doorW, core.h);
+    ctx.fillStyle="#5d6773"; ctx.fillRect(dx, cy, doorW, 7);
+    ctx.fillStyle="#2f363d";
+    for(let sy=cy+14; sy<cy+core.h; sy+=22) ctx.fillRect(dx, sy, doorW, 3);
+    // 斜向加强筋
+    ctx.strokeStyle="#39414a"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(dx+3, cy+8); ctx.lineTo(dx+doorW-3, cy+core.h-6); ctx.stroke();
+    // 底部黄黑警示条
+    ctx.save(); ctx.beginPath(); ctx.rect(dx, cy+core.h-20, doorW, 20); ctx.clip();
+    ctx.fillStyle="#e8c24a"; ctx.fillRect(dx, cy+core.h-20, doorW, 20);
+    ctx.fillStyle="#22262a";
+    for(let s=-20; s<doorW+20; s+=16){
+      ctx.beginPath(); ctx.moveTo(dx+s, cy+core.h); ctx.lineTo(dx+s+8, cy+core.h-20);
+      ctx.lineTo(dx+s+16, cy+core.h-20); ctx.lineTo(dx+s+8, cy+core.h); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  };
+  door(cx - slide);
+  door(cx + doorW + slide);
+  // 门框（角钢 + 铆钉 + 警示漆）
+  ctx.fillStyle="#33383f";
+  ctx.fillRect(cx-24, cy-34, 24, core.h+34);
+  ctx.fillRect(cx+core.w, cy-34, 24, core.h+34);
+  ctx.fillRect(cx-24, cy-34, core.w+48, 24);
+  ctx.fillStyle="#4a515a";
+  ctx.fillRect(cx-22, cy-32, 20, core.h+30);
+  ctx.fillRect(cx+core.w+2, cy-32, 20, core.h+30);
+  ctx.fillRect(cx-22, cy-32, core.w+44, 20);
+  ctx.fillStyle="#e8c24a"; ctx.fillRect(cx-22, cy-32, core.w+44, 5);
+  ctx.fillStyle="#22262a";
+  for(let s=0; s<core.w+44; s+=18) ctx.fillRect(cx-22+s, cy-32, 9, 5);
+  // 门框铆钉
+  ctx.fillStyle="#7b828b";
+  for(let sy=cy-24; sy<cy+core.h; sy+=26){
+    ctx.fillRect(cx-18, sy, 4, 4); ctx.fillRect(cx+core.w+14, sy, 4, 4);
+  }
+
+  if(!core.dead){
+    // ---- 核心反应眼：多层同心环 + 四爪压环 + 脉冲 ----
+    const ex = cx + core.w/2, ey = cy + core.h*0.42;
+    const pulse = 0.5 + 0.5*Math.sin(perfNow/180);
+    // 外壳
+    ctx.fillStyle="#20252a"; ctx.beginPath(); ctx.arc(ex, ey, 30, 0, 7); ctx.fill();
+    ctx.fillStyle="#3c444d"; ctx.beginPath(); ctx.arc(ex, ey, 26, 0, 7); ctx.fill();
+    // 四爪压环
+    ctx.fillStyle="#5a636d";
+    for(let k=0;k<4;k++){
+      const a = k*Math.PI/2 + Math.PI/4;
+      ctx.save(); ctx.translate(ex+Math.cos(a)*27, ey+Math.sin(a)*27); ctx.rotate(a);
+      ctx.fillRect(-4, -6, 12, 12); ctx.restore();
+    }
+    // 发光核心
+    const eg = ctx.createRadialGradient(ex-4, ey-5, 2, ex, ey, 22);
+    eg.addColorStop(0, "#fffbe6");
+    eg.addColorStop(.42, pulse>.5 ? "#ff9b4d" : "#ff6a3d");
+    eg.addColorStop(1, "#6a1204");
+    ctx.fillStyle=eg; ctx.beginPath(); ctx.arc(ex, ey, 21, 0, 7); ctx.fill();
+    // 能量环
+    ctx.strokeStyle="rgba(255,220,150,.85)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(ex, ey, 15 + pulse*3, perfNow/420, perfNow/420 + 4.2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex, ey, 15 + (1-pulse)*3, -perfNow/300, -perfNow/300 + 3.4); ctx.stroke();
+    // 中心竖向光缝
+    ctx.fillStyle="rgba(255,255,235,.8)";
+    ctx.fillRect(ex-1.6, ey-12, 3.2, 24);
+  }
+  // 受损：裂缝与火星
+  if(dmg > 0.25){
+    ctx.strokeStyle = "rgba(20,16,14," + (0.30 + dmg*0.45) + ")";
+    ctx.lineWidth = 2;
+    for(let k=0;k<5;k++){
+      const sx0 = cx + core.w*(0.15+0.17*k), sy0 = cy + core.h*0.15 + (k%2)*40;
+      ctx.beginPath(); ctx.moveTo(sx0, sy0);
+      ctx.lineTo(sx0-7, sy0+13); ctx.lineTo(sx0+3, sy0+24); ctx.lineTo(sx0-6, sy0+38);
+      ctx.stroke();
+    }
+    if(dmg > 0.6 && Math.floor(perfNow/90)%3===0){
+      const px = cx + 10 + (perfNow/7)%(core.w-20), py = cy + 20 + (perfNow/11)%(core.h-40);
+      ctx.fillStyle="#ffd27a"; ctx.fillRect(px, py, 2.4, 2.4);
     }
   }
-  // 核心血条
+
+  // ================= 上下两座火炮 =================
+  for(const g of b.cannons){
+    const gx = g.x-cam, gy = g.y, mx = gx+g.w/2, my = gy+g.h/2;
+    // 墙面炮座（装甲凸台）
+    ctx.fillStyle="#2c3136"; ctx.fillRect(gx-6, gy-6, g.w+12, g.h+12);
+    ctx.fillStyle="#3d444c"; ctx.fillRect(gx-4, gy-4, g.w+8, g.h+8);
+    ctx.fillStyle="#22262a"; ctx.fillRect(gx, gy, g.w, 6);
+    if(!g.dead){
+      // 炮塔（朝左，随主角上下微调）
+      let aim = Math.atan2(chestY()-my, (player.x+player.w/2)-mx);
+      if(Math.cos(aim) > 0) aim = Math.PI - aim;              // 强制朝左半平面
+      let rel = aim - Math.PI;
+      rel = Math.max(-0.62, Math.min(0.62, rel));
+      const ang = Math.PI + rel;
+      // 后座
+      const rec = (g.t % 150 < 8) ? 4 : 0;
+      // 炮管
+      ctx.save(); ctx.translate(mx, my); ctx.rotate(ang); ctx.translate(rec, 0);
+      ctx.fillStyle="#1b2025"; ctx.fillRect(-2, -7, 30, 14);
+      ctx.fillStyle="#3a434c"; ctx.fillRect(-2, -7, 30, 3.4);
+      ctx.fillStyle="#2a3138"; ctx.fillRect(24, -9, 9, 18);   // 炮口制退器
+      ctx.fillStyle="#0a0c0e"; ctx.fillRect(31, -4.6, 4, 9.2);
+      ctx.fillStyle="#555f69"; ctx.fillRect(2, -9, 5, 3);     // 箍
+      if(g.t % 150 < 4){
+        ctx.fillStyle="#ffe58a"; ctx.globalAlpha=.9;
+        ctx.beginPath(); ctx.moveTo(35,-6); ctx.lineTo(48,-2); ctx.lineTo(35,2); ctx.closePath(); ctx.fill();
+        ctx.globalAlpha=1;
+      }
+      ctx.restore();
+      // 炮塔圆壳
+      ctx.fillStyle="#20252b"; ctx.beginPath(); ctx.arc(mx, my, 19, 0, 7); ctx.fill();
+      ctx.fillStyle="#454e58"; ctx.beginPath(); ctx.arc(mx, my, 16, 0, 7); ctx.fill();
+      ctx.fillStyle="#5b6570"; ctx.beginPath(); ctx.arc(mx-2, my-3, 13, 0, 7); ctx.fill();
+      ctx.fillStyle="#38404a"; ctx.beginPath(); ctx.arc(mx, my, 7, 0, 7); ctx.fill();
+      // 瞄准红灯
+      const blink = Math.floor(g.t/9)%2===0;
+      ctx.fillStyle = blink ? "#ff5b3d" : "#7a1a10";
+      ctx.beginPath(); ctx.arc(mx+7, my-6, 3.4, 0, 7); ctx.fill();
+      ctx.fillStyle = blink ? "#ffd0b0" : "#5a1a10";
+      ctx.beginPath(); ctx.arc(mx+7, my-6, 1.6, 0, 7); ctx.fill();
+    } else {
+      // 击毁：焦黑炮塔 + 破口 + 浓烟
+      ctx.fillStyle="#20242a"; ctx.beginPath(); ctx.arc(mx, my, 18, 0, 7); ctx.fill();
+      ctx.fillStyle="#0d0f11"; ctx.beginPath(); ctx.arc(mx-3, my+3, 10, 0, 7); ctx.fill();
+      ctx.fillStyle="#111315";
+      ctx.beginPath(); ctx.moveTo(mx-8,my-6); ctx.lineTo(mx+9,my-9); ctx.lineTo(mx+4,my+2); ctx.closePath(); ctx.fill();
+      for(let s=0;s<3;s++){
+        const t2 = (perfNow/70 + s*11) % 34;
+        ctx.globalAlpha = Math.max(0, .42 - t2*0.012);
+        ctx.fillStyle="#6a6a72";
+        ctx.beginPath(); ctx.arc(mx-6 + Math.sin(t2*0.3)*5, my-14-t2*1.6, 5+t2*0.28, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha=1;
+      ctx.fillStyle="#ff7a3d";
+      ctx.beginPath(); ctx.arc(mx-4, my+5, 2.2, 0, 7); ctx.fill();
+    }
+  }
+
+  // ---- 要塞核心血条 ----
   if(!b.dead){
-    ctx.fillStyle="#000a"; ctx.fillRect(W/2-160, 24, 320, 16);
-    ctx.fillStyle="#ff5b3d"; ctx.fillRect(W/2-158, 26, 316*c.hp/c.maxHp, 12);
-    ctx.fillStyle="#fff"; ctx.font="12px monospace"; ctx.fillText("要塞核心", W/2-30, 56);
+    const bw = 340, bx = W/2-bw/2, by = 24;
+    ctx.fillStyle="#000a"; ctx.fillRect(bx-4, by-4, bw+8, 26);
+    ctx.fillStyle="#1a1c20"; ctx.fillRect(bx, by, bw, 18);
+    const ratio = Math.max(0, core.hp/core.maxHp);
+    ctx.fillStyle = ratio > .35 ? "#ff5b3d" : "#ff2d1a";
+    ctx.fillRect(bx+2, by+2, (bw-4)*ratio, 14);
+    // 分段刻度
+    ctx.fillStyle="rgba(0,0,0,.45)";
+    for(let s=1;s<10;s++) ctx.fillRect(bx + (bw/10)*s, by+2, 2, 14);
+    ctx.fillStyle="#ffd0b0"; ctx.fillRect(bx+2, by+2, (bw-4)*ratio, 3);
+    ctx.fillStyle="#fff"; ctx.font="bold 12px monospace"; ctx.textAlign="center";
+    ctx.fillText("要 塞 核 心", W/2, by+34); ctx.textAlign="left";
   }
 }
 function drawMedals(){
@@ -2750,6 +3306,7 @@ function render(){
   for(const e of enemies) drawSoldier(e);
   drawBoss();
   if(player.slideT > 0) drawPlayerSlide();
+  else if(player.rolling && !player.onGround) drawPlayerRoll();
   else if(player.crouch) drawPlayerCrouch(); else drawPlayer();
   drawBullets();
   drawParticles();

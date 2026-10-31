@@ -103,29 +103,23 @@ const BGM = {
 const keys = {};
 window.addEventListener("keydown", e => {
   keys[e.code] = true;
-  // ↑（或 W）按下：立即锁定瞄准；若同时按着方向键则"一键斜射"发射一枚
+  // ↑（或 W）按下：锁定抬枪状态；↑+方向 按住即"斜上瞄准"，可边走边按 1 连射
   if(e.code==="ArrowUp" || e.code==="KeyW"){
     if(typeof player!=="undefined" && player) player.aimLatch = 90;
-    if(!e.repeat) diagQuickShot();
+    lockAimDir();
   }
-  // 后按方向键（↑ 已按住）同样触发一键斜射
-  if((e.code==="ArrowLeft" || e.code==="ArrowRight") && !e.repeat && kUp()) diagQuickShot();
+  if((e.code==="ArrowLeft" || e.code==="ArrowRight") && !e.repeat && kUp()) lockAimDir();
   if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
   if(e.code==="KeyM"){ BGM.muted = !BGM.muted; if(userBgm) userBgm.muted = BGM.muted; }  // M 键 BGM 静音开关
   if(e.code === "Enter") gameState.onEnter();
   ac(); // 首次按键激活音频
 });
-// 一键斜射：↑ + 方向 同时按下的瞬间自动发射一枚斜上子弹（无需再按 1）
-function diagQuickShot(){
-  if(state!=="play" || !player || player.dead || player.crouch || player.slideT>0) return;
+// ↑ + 方向：只锁定/记住斜射朝向，不再自动帮玩家开火（开火完全交给 1 键连射）
+function lockAimDir(){
+  if(!player) return;
   const dir = kLeft() ? -1 : (kRight() ? 1 : 0);
-  if(!dir) return;
-  player.face = dir;
-  player.diagDir = dir;
-  player.aimLatch = 75;
-  player.aimAng = -0.61;
-  player.fireCd = 0;
-  tryShoot(true);
+  if(dir) player.diagDir = dir;
+  player.aimLatch = 90;
 }
 window.addEventListener("keyup", e => keys[e.code] = false);
 const kLeft  = () => keys["ArrowLeft"];
@@ -659,6 +653,13 @@ function update(){
       p.x = (p.x + p.w/2 < c.x + c.w/2) ? c.x - p.w : c.x + c.w;
     }
   }
+  // 坦克侧壁：只能从上方踩上去，不能直接穿过（用上一帧脚位判断，下落时不被推开）
+  for(const e of enemies){
+    if(e.kind!=="tank" || e.dead) continue;
+    if(aabb(p,e) && p.y + p.h - p.vy > e.y + 12){
+      p.x = (p.x + p.w/2 < e.x + e.w/2) ? e.x - p.w : e.x + e.w;
+    }
+  }
 
   // 平台 / 坡面地形碰撞（扫掠式：上一帧脚在表面上方、这一帧越过即落地；走路时贴合坡面）
   let landed = false;
@@ -666,7 +667,7 @@ function update(){
   // 脚部碰撞区间：脚的任何一部分踩到支撑面都算站立（放宽接触判定）
   const footL = p.x + 2, footR = p.x + p.w - 2;
   if(p.vy >= 0){
-    for(const pl of platforms.concat(crates)){
+    for(const pl of platforms.concat(crates, tankTops())){
       if(pl.dead) continue;
       if(footR > pl.x && footL < pl.x + pl.w &&
          feetPrev <= pl.y + 2 && p.y + p.h >= pl.y){
@@ -698,14 +699,14 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
-  // 瞄准方向：↑ 按住或 1.2 秒内按过（锁定），单 ↑ 正上，配合方向键斜上 35°
+  // 瞄准方向：↑ 按住 = 抬枪，↑+方向 = 斜上 35°（朝该方向走 + 朝该方向斜射，边走边打）
   // 方向会被"记住"：即使三键同按导致系统丢键，斜射也不会中途变回竖直
   if(kUp()) p.aimLatch = 75;
   else if(p.aimLatch > 0) p.aimLatch--;
   if(kLeft())       p.diagDir = -1;
   else if(kRight()) p.diagDir =  1;
   p.aimAng = 0;
-  const aimingUp = p.aimLatch > 0 && !p.crouch;
+  const aimingUp = p.aimLatch > 0 && !kDown();     // 蹲下/滑铲时压枪平射
   if(aimingUp){
     if(p.diagDir){ p.aimAng = -0.61; if(p.slideT<=0) p.face = p.diagDir; }
     else p.aimAng = -Math.PI/2;
@@ -713,11 +714,13 @@ function update(){
     p.diagDir = 0;                    // 瞄准窗口结束后忘掉方向
   }
   // 空中按住 ↓：枪口朝正下方（可对脚下开火，带朝下瞄准动画）
-  if(!p.onGround && kDown()) p.aimAng = Math.PI/2;
+  if(!p.onGround && kDown() && !aimingUp) p.aimAng = Math.PI/2;
+  // 滑铲低姿：枪口压平，贴地横扫（铲中也能开火）
+  if(p.slideT > 0){ p.aimAng = 0; p.diagDir = 0; }
 
-  // 射击（数字 1 键；一键斜射走 tryShoot 强制通道）
+  // 射击（数字 1 键）：站立跑动 / 跳跃 / 滑铲 / 斜上 全部可开火
   if(p.fireCd>0) p.fireCd--;
-  if(kShoot() && p.slideT<=0) tryShoot(false);   // 滑铲中不能开火
+  if(kShoot()) tryShoot(false);
 
   // 道具拾取：同类=升级(Lv1→2→3，满级转积分)；异类=保住手里的枪并转积分（按住 ↑ 拾取才换枪）
   for(const pu of powerups){
@@ -785,9 +788,14 @@ function update(){
         enemies.push(makeSoldier(t.px, gy<Infinity ? gy-40 : 300, "sniper"));
       }
       if(t.type==="turret"){
-        // 炮台同样按坡面高度落位
-        const gy = groundYAt(t.px);
-        enemies.push(makeTurret(t.px, gy<Infinity ? gy-40 : 300, t.sp));
+        // 第二关的固定炮台全部换成坦克（会推进碾压 / 可踩上去当平台）
+        if(LEVEL_IDX === 2){
+          enemies.push(makeTank(t.px));
+        } else {
+          // 炮台同样按坡面高度落位
+          const gy = groundYAt(t.px);
+          enemies.push(makeTurret(t.px, gy<Infinity ? gy-40 : 300, t.sp));
+        }
       }
       if(t.type==="trencher" || t.type==="towerSniper" || t.type==="camper"){
         enemies.push(makeFort(t.px, t.type==="towerSniper" ? "tower" : t.type));
@@ -872,6 +880,60 @@ function update(){
           S.shoot(); e.burst--;
         }
       }
+    } else if(e.kind==="tank"){
+      // ===== 坦克：向前推进碾压 → 没碾到就倒退 → 循环；炮管抬不高，站车顶即安全 =====
+      e.t++; if(e.flash>0) e.flash--;
+      const dxk = (p.x+p.w/2) - (e.x+e.w/2);
+      const dist = Math.abs(dxk);
+      const dir = dxk > 0 ? 1 : -1;
+      e.face = dir;
+      // 状态机：待机 → 冲锋 → 后退 → 待机
+      if(e.stT > 0) e.stT--;
+      if(e.stT === 0){
+        if(e.st === "charge")       { e.st = "retreat"; e.stT = 62; }
+        else if(e.st === "retreat") { e.st = "idle";    e.stT = 74 + Math.random()*50; }
+        else                        { e.st = "charge";  e.stT = 80; }
+      }
+      let mv = 0;
+      if(e.st === "charge")       mv = dir * 3.1;      // 冲上来试图碾压
+      else if(e.st === "retreat") mv = -dir * 1.9;     // 没碾到 → 倒车拉开距离
+      else                        mv = dir * 0.55;     // 待机时缓慢找位置
+      const nx = e.x + mv;
+      if(nx < e.home - 340 || nx > e.home + 340) mv = 0;   // 不离开属地
+      e.x += mv; e.vx = mv;
+      e.tread += mv * 0.6;
+      // 履带碾碎挡路的木箱
+      for(const c of crates){
+        if(!c.dead && aabb(e,c) && c.y + c.h > e.y + 8){
+          c.hp = 0; c.dead = true; score += 50;
+          explode(c.x+c.w/2, c.y+c.h/2, c.loot?"#d9b07a":"#8a6a3a", 16, 4);
+          if(c.loot) dropLoot(c.x+c.w/2, c.y+c.h/2);
+        }
+      }
+      // 站在车顶的玩家随车移动（被带着走）
+      if(p.onGround && Math.abs((p.y+p.h) - e.y) <= 5 &&
+         p.x + p.w > e.x + 4 && p.x < e.x + e.w - 4) p.x += mv;
+      // 碾压判定：车身撞进玩家（站在车顶不算）
+      if(!p.dead && p.inv <= 0 && p.y + p.h > e.y + 16 && aabb(hitbox(), e)) hurtPlayer();
+      // 贴地
+      const feetPrevK = e.y + e.h;
+      e.vy = Math.min(e.vy + 0.55, 14); e.y += e.vy;
+      if(e.vy >= 0){
+        const gy = groundYAt(e.x + e.w/2);
+        if(gy < Infinity && feetPrevK <= gy + 2 && e.y + e.h >= gy){ e.y = gy - e.h; e.vy = 0; }
+      }
+      // 炮击：主炮仰角锁死在 ±0.30rad，打不到头顶的人
+      e.cd--;
+      let ang = Math.atan2(chestY() - (e.y + 16), (p.x+p.w/2) - (e.x + e.w/2));
+      ang = Math.max(-0.30, Math.min(0.30, ang));
+      e.gunA += (ang - e.gunA) * 0.14;
+      if(!e.dead && e.cd <= 0 && dist < 680){
+        e.cd = 120 + Math.random()*50; e.recoil = 9;
+        const sx = e.x + e.w/2 + e.face*34, sy = e.y + 16;
+        enemyShot(sx, sy, sx + Math.cos(e.gunA)*600, sy + Math.sin(e.gunA)*600, 5.4, 0.05, 210);
+        S.shoot(); shake = Math.max(shake, 4);
+      }
+      if(e.recoil > 0) e.recoil--;
     } else if(e.kind==="cam"){
       // 天花板摄像头：扫描到主角 → 红灯预警 → 连点射
       e.t = (e.t||0) + 1; e.animT += 0.35;
@@ -1302,6 +1364,21 @@ function makeCam(px, py){
   return {kind:"cam", x:px, y, baseY:y, w:40, h:32, hp:2, dead:false,
           cd:70+Math.random()*50, t:Math.random()*100, warn:0, burst:0, bt:0, animT:0};
 }
+// 坦克（第二关炮台的替代）：重装甲、会向前推进碾压、踩上去可当平台；炮管只能平射
+function makeTank(px){
+  const gy = groundYAt(px);
+  return {kind:"tank", x:px, y:(gy<Infinity?gy:GROUND_Y)-54, w:104, h:54,
+          hp:16, maxHp:16, dead:false, vx:0, vy:0, home:px,
+          st:"idle", stT:80, cd:90+Math.random()*60, face:-1,
+          t:Math.random()*100, tread:0, gunA:0, recoil:0, flash:0};
+}
+// 坦克顶面（当作可站立平台）
+function tankTops(){
+  const out = [];
+  for(const e of enemies) if(e.kind==="tank" && !e.dead)
+    out.push({x:e.x+6, y:e.y, w:e.w-12, h:12, tank:e});
+  return out;
+}
 // 敌方射击统一入口：aim 点带随机偏差（降低命中率，给玩家留操作空间）
 function enemyShot(sx, sy, tx, ty, spd, spread, life){
   const base = Math.atan2(ty-sy, tx-sx) + (Math.random()*2-1)*(spread===undefined?0.12:spread);
@@ -1316,6 +1393,7 @@ function ebox(e){
 }
 function scoreFor(e){
   if(e.kind==="turret") return 500;
+  if(e.kind==="tank")   return 1200;
   if(e.kind==="roller") return 600;
   if(e.kind==="cam")    return 350;
   if(e.kind==="drone")  return 300;
@@ -1790,35 +1868,95 @@ function drawInsert(){
   // 绳索末端把手
   if(ropeLen>0){ ctx.fillStyle="#8a6a3a"; ctx.fillRect(hx+7, hy+22+ropeLen-4, 10, 5); }
 }
+// 枪械剪影：枪托 + 机匣 + 枪管 + 弹匣 + 准星（沿 aimAng 旋转）
+function paintGun(ox, oy, ang, len){
+  ctx.save(); ctx.translate(ox, oy); ctx.rotate(ang);
+  ctx.fillStyle="#2a2118"; ctx.fillRect(-6,-2.6,7,5.2);          // 枪托
+  ctx.fillStyle="#20252c"; ctx.fillRect(0,-3.2,12,6.4);          // 机匣
+  ctx.fillStyle="#3c4650"; ctx.fillRect(0,-3.2,12,1.8);          // 机匣高光
+  ctx.fillStyle="#12161a"; ctx.fillRect(12,-1.9,len,3.8);        // 枪管
+  ctx.fillStyle="#4a5560"; ctx.fillRect(12+len-3.5,-4.2,2.2,2.6); // 准星座
+  ctx.fillStyle="#2c343d"; ctx.fillRect(3,2.2,4.2,7);            // 弹匣
+  ctx.fillStyle="#1a1f24"; ctx.fillRect(-2,2,3,5);               // 握把
+  ctx.restore();
+}
 function drawPlayer(){
   const p = player;
   if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return; // 受伤闪烁
   const x = p.x-cam, y = p.y;
   const run = p.onGround && Math.abs(p.vx)>0.1;
-  const bob = run ? Math.sin(p.animT*0.4)*2 : 0;
+  const ph = p.animT*0.36;
+  const bob = run ? Math.abs(Math.sin(ph))*1.8 : Math.sin(p.animT*0.05)*0.7;
+  // 落地投影
+  ctx.globalAlpha=.28; ctx.fillStyle="#000";
+  ctx.beginPath(); ctx.ellipse(x+p.w/2, p.y+p.h+1.5, 11.5, 3.2, 0, 0, 7); ctx.fill();
+  ctx.globalAlpha=1;
   ctx.save(); ctx.translate(x+p.w/2, y+bob); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
-  // 腿
-  ctx.fillStyle="#2857a8";
-  if(run){
-    const lo = Math.sin(p.animT*0.4)*6;
-    ctx.fillRect(2,26,7,12+lo*0.5); ctx.fillRect(12,26,7,12-lo*0.5);
-  } else { ctx.fillRect(2,26,7,12); ctx.fillRect(12,26,7,12); }
-  // 躯干（裸上身 + 弹带，向经典致敬）
-  ctx.fillStyle="#e8a878"; ctx.fillRect(3,14,16,13);
-  ctx.fillStyle="#7a4a28"; ctx.fillRect(3,18,16,3);
-  // 头 + 红头巾
-  ctx.fillStyle="#e8a878"; ctx.fillRect(5,3,12,11);
-  ctx.fillStyle="#d42a2a"; ctx.fillRect(4,1,14,5);
-  ctx.fillRect(16,3,7,3);
-  // 枪（跟随瞄准方向旋转）+ 瞄准指示箭头
-  ctx.fillStyle="#444";
-  ctx.save(); ctx.translate(13,18); ctx.rotate(p.aimAng||0); ctx.fillRect(0,-2,14,4); ctx.restore();
+  const skin="#e9b184", skinD="#c98d63", shirt="#1d3f6e", shirtHi="#2c5b96",
+        pants="#20477c", pantsHi="#3567ad", boot="#15171c";
+  const sw = run ? Math.sin(ph) : 0;
+  // —— 后腿（暗一档，产生纵深）——
+  ctx.fillStyle="#173358"; ctx.fillRect(11 + sw*2.4, 22, 6.4, 11);
+  ctx.fillStyle="#101216"; ctx.fillRect(10 + sw*2.4, 32, 8.4, 5.4);
+  // —— 前腿 ——
+  ctx.fillStyle=pants;  ctx.fillRect(4 - sw*2.4, 22, 7, 11);
+  ctx.fillStyle=pantsHi; ctx.fillRect(4 - sw*2.4, 22, 2.6, 11);
+  ctx.fillStyle=boot;   ctx.fillRect(3 - sw*2.4, 32, 9, 5.6);
+  // —— 躯干（赤裸上身 + 战术背心 + 交叉弹带）——
+  ctx.fillStyle=skin;  ctx.fillRect(3.5, 10, 15, 13);
+  ctx.fillStyle=skinD; ctx.fillRect(3.5, 19.5, 15, 3.5);
+  ctx.fillStyle=shirt;
+  ctx.beginPath();
+  ctx.moveTo(4,10.5); ctx.lineTo(18.5,10.5); ctx.lineTo(18.5,19.2);
+  ctx.lineTo(12,22); ctx.lineTo(4,19.2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=shirtHi; ctx.fillRect(5,11,13,2);
+  // 交叉弹带
+  ctx.save(); ctx.translate(11,16); ctx.rotate(-0.42);
+  ctx.fillStyle="#7a5a2e"; ctx.fillRect(-8,-1.6,16,3.2);
+  ctx.fillStyle="#e8c25a";
+  for(let i=-6;i<=6;i+=3) ctx.fillRect(i,-1.3,1.7,2.6);
+  ctx.restore();
+  // 腰带
+  ctx.fillStyle="#2a2f38"; ctx.fillRect(4,22,15,2.8);
+  ctx.fillStyle="#b8a05a"; ctx.fillRect(12,22,3,2.8);
+  // —— 后臂 ——
+  ctx.fillStyle=skinD; ctx.fillRect(2,11,4.6,9); ctx.fillRect(2,18.5,5.6,4);
+  // —— 头 + 红头巾 ——
+  ctx.fillStyle=skin;  ctx.fillRect(5.5,1.5,10,10);
+  ctx.fillStyle=skinD; ctx.fillRect(13.5,3.5,2,7);
+  ctx.fillStyle="#cf2d2d"; ctx.fillRect(4.5,0,12,4.6);
+  ctx.fillStyle="#e64545"; ctx.fillRect(5,0,10.5,1.6);
+  // 头巾飘带（随跑动摆动）
+  const fl = Math.sin(p.animT*0.22)*1.6;
+  ctx.fillStyle="#b32424";
+  ctx.fillRect(1.5, 2.2 + fl*0.4, 4.6, 2.2);
+  ctx.fillRect(0, 4.4 + fl, 4.4, 1.8);
+  // 面部：眉骨阴影 + 眼睛
+  ctx.fillStyle="#b32424"; ctx.fillRect(5,4.2,10.5,1);
+  ctx.fillStyle="#1a1a1a"; ctx.fillRect(11.4,5.8,2.4,2.2);
+  ctx.fillStyle="#fff";    ctx.fillRect(11.4,5.8,1,1);
+  // —— 前臂 + 枪 ——
+  const ang = p.aimAng || 0;
+  const sx = 14.5, sy = 15;
+  const hx = sx + Math.cos(ang)*8, hy = sy + Math.sin(ang)*8;
+  ctx.lineCap="round";
+  ctx.strokeStyle=skin;  ctx.lineWidth=4.6;
+  ctx.beginPath(); ctx.moveTo(sx-1, sy+1); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.strokeStyle=skinD; ctx.lineWidth=1.3;
+  ctx.beginPath(); ctx.moveTo(sx-1, sy+3.2); ctx.lineTo(hx, hy+2.2); ctx.stroke();
+  ctx.lineCap="butt";
+  paintGun(hx-1, hy, ang, 9);
+  // 瞄准指示：准星虚线箭头
   if(p.aimAng){
-    const ang=p.aimAng, mx=13+Math.cos(ang)*20, my=18+Math.sin(ang)*20;
+    const mx = hx + Math.cos(ang)*24, my = hy + Math.sin(ang)*24;
+    ctx.globalAlpha=.85;
+    ctx.strokeStyle="#ffd34d"; ctx.setLineDash([3,3]); ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(hx+Math.cos(ang)*12, hy+Math.sin(ang)*12);
+    ctx.lineTo(mx, my); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle="#ffd34d";
     ctx.save(); ctx.translate(mx,my); ctx.rotate(ang);
-    ctx.beginPath(); ctx.moveTo(9,0); ctx.lineTo(-2,-6); ctx.lineTo(-2,6); ctx.closePath(); ctx.fill();
-    ctx.restore();
+    ctx.beginPath(); ctx.moveTo(7,0); ctx.lineTo(-3,-4.6); ctx.lineTo(-3,4.6); ctx.closePath(); ctx.fill();
+    ctx.restore(); ctx.globalAlpha=1;
   }
   ctx.restore();
 }
@@ -1826,25 +1964,39 @@ function drawPlayerSlide(){
   const p = player;
   if(p.inv>0 && Math.floor(p.inv/4)%2===0 && !p.dead) return;
   const x = p.x-cam, y = p.y;
-  ctx.save(); ctx.translate(x+p.w/2, y); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
-  // 身体几乎贴地：腿前伸、上身后仰
-  ctx.fillStyle="#2857a8"; ctx.fillRect(2,30,22,7);            // 前伸的双腿
-  ctx.fillStyle="#3a6dc4"; ctx.fillRect(2,30,22,3);            // 裤腿高光
-  ctx.fillStyle="#1c1c22"; ctx.fillRect(24,32,7,5);            // 军靴
-  ctx.fillStyle="#e8a878"; ctx.fillRect(0,26,16,12);           // 躯干（后仰）
-  ctx.fillStyle="#7a4a28"; ctx.fillRect(0,29,16,3);            // 弹带
-  ctx.fillStyle="#e8a878"; ctx.fillRect(-6,22,12,10);          // 头
-  ctx.fillStyle="#d42a2a"; ctx.fillRect(-7,20,14,5);           // 头巾
-  ctx.fillRect(2,22,7,3);
-  // 枪横贴身侧
-  ctx.fillStyle="#444"; ctx.fillRect(6,24,14,4);
-  // 铲地扬尘
+  // 扬起的地面尘土
   const dust = (p.animT%6<3);
   if(dust){
-    ctx.fillStyle="#cfc7ad"; ctx.globalAlpha=.55;
-    ctx.fillRect(-10,32,8,4); ctx.fillRect(-16,30,6,3);
+    ctx.globalAlpha=.5; ctx.fillStyle="#cfc7ad";
+    ctx.beginPath(); ctx.ellipse(x - p.face*10, y+34, 12, 4, 0, 0, 7); ctx.fill();
     ctx.globalAlpha=1;
   }
+  ctx.save(); ctx.translate(x+p.w/2, y); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
+  const skin="#e9b184", skinD="#c98d63", shirt="#1d3f6e",
+        pants="#20477c", pantsHi="#3567ad", boot="#15171c";
+  // 后腿（贴地）
+  ctx.fillStyle="#173358"; ctx.fillRect(9, 31, 13, 6);
+  // 前伸双腿 + 军靴
+  ctx.fillStyle=pants;   ctx.fillRect(1, 29, 22, 7);
+  ctx.fillStyle=pantsHi; ctx.fillRect(1, 29, 22, 2.4);
+  ctx.fillStyle=boot;    ctx.fillRect(22, 31, 8, 5.6);
+  ctx.fillStyle="#2b2f36"; ctx.fillRect(23, 31, 6, 2);
+  // 躯干（后仰）
+  ctx.fillStyle=skin;   ctx.fillRect(-2, 23, 16, 11);
+  ctx.fillStyle=skinD;  ctx.fillRect(-2, 30, 16, 3);
+  ctx.fillStyle=shirt;
+  ctx.beginPath(); ctx.moveTo(-1,23.5); ctx.lineTo(13,23.5); ctx.lineTo(13,30);
+  ctx.lineTo(6,32); ctx.lineTo(-1,30); ctx.closePath(); ctx.fill();
+  ctx.fillStyle="#2a2f38"; ctx.fillRect(-1,31,15,2.4);
+  // 头（贴近地面）
+  ctx.fillStyle=skin;  ctx.fillRect(-8, 19, 11, 9.5);
+  ctx.fillStyle=skinD; ctx.fillRect(-8, 26, 11, 2.5);
+  ctx.fillStyle="#cf2d2d"; ctx.fillRect(-9, 17, 13, 4.2);
+  ctx.fillStyle="#e64545"; ctx.fillRect(-8.5, 17, 11, 1.4);
+  ctx.fillStyle="#b32424"; ctx.fillRect(-13, 19, 4.6, 2);
+  ctx.fillStyle="#1a1a1a"; ctx.fillRect(-2.5, 22, 2.2, 2);
+  // 枪横贴胸前（滑铲低姿平射）
+  paintGun(4, 25, 0, 10);
   ctx.restore();
 }
 function drawPlayerCrouch(){
@@ -1852,14 +2004,34 @@ function drawPlayerCrouch(){
   if(p.inv>0 && Math.floor(p.inv/4)%2===0) return;
   const x = p.x-cam, y = p.y;
   ctx.save(); ctx.translate(x+p.w/2, y); ctx.scale(p.face,1); ctx.translate(-p.w/2,0);
-  // 蹲姿：蜷缩下半身
-  ctx.fillStyle="#2857a8"; ctx.fillRect(3,34,16,4);          // 蜷腿
-  ctx.fillStyle="#e8a878"; ctx.fillRect(2,28,18,7);          // 躯干
-  ctx.fillStyle="#7a4a28"; ctx.fillRect(2,30,18,2);          // 弹带
-  ctx.fillStyle="#e8a878"; ctx.fillRect(5,17,12,11);         // 头
-  ctx.fillStyle="#d42a2a"; ctx.fillRect(4,15,14,5);          // 头巾
-  ctx.fillRect(16,17,7,3);
-  ctx.fillStyle="#444";    ctx.fillRect(14,32,12,4);         // 枪
+  const skin="#e9b184", skinD="#c98d63", shirt="#1d3f6e", shirtHi="#2c5b96",
+        pants="#20477c", boot="#15171c";
+  // 蜷起的后腿
+  ctx.fillStyle="#173358";
+  ctx.fillRect(2, 33, 13, 5);
+  ctx.fillStyle="#101216"; ctx.fillRect(11, 34, 8, 4.4);
+  // 前腿（膝盖立起）
+  ctx.fillStyle=pants; ctx.fillRect(4, 27, 8, 8);
+  ctx.fillStyle=boot;  ctx.fillRect(2.5, 33.5, 11, 4.6);
+  // 躯干
+  ctx.fillStyle=skin;  ctx.fillRect(3, 18, 15, 11);
+  ctx.fillStyle=shirt;
+  ctx.beginPath(); ctx.moveTo(3.5,18.5); ctx.lineTo(17.5,18.5); ctx.lineTo(17.5,26);
+  ctx.lineTo(11,28.5); ctx.lineTo(3.5,26); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=shirtHi; ctx.fillRect(4.5,19,12,2);
+  ctx.fillStyle="#2a2f38"; ctx.fillRect(3.5,27,14,2.4);
+  // 后臂
+  ctx.fillStyle=skinD; ctx.fillRect(2,19,4.4,7);
+  // 头
+  ctx.fillStyle=skin;  ctx.fillRect(5.5,9,10,9.4);
+  ctx.fillStyle=skinD; ctx.fillRect(13.5,11,2,6);
+  ctx.fillStyle="#cf2d2d"; ctx.fillRect(4.5,7.5,12,4.4);
+  ctx.fillStyle="#e64545"; ctx.fillRect(5,7.5,10.5,1.5);
+  ctx.fillStyle="#b32424"; ctx.fillRect(1.5,9.6,4.6,2);
+  ctx.fillStyle="#1a1a1a"; ctx.fillRect(11.4,13,2.4,2.2);
+  // 枪（压平）
+  ctx.fillStyle=skin; ctx.fillRect(12,22,5,4);
+  paintGun(14, 23.5, 0, 9);
   ctx.restore();
 }
 function drawDrone(e, x, y){
@@ -1888,6 +2060,88 @@ function drawDrone(e, x, y){
     ctx.beginPath(); ctx.arc(x+w/2+4, y+h/2+1, 9, 0, 7); ctx.fill(); ctx.globalAlpha=1; }
   // 挂载炮管
   ctx.fillStyle="#20262c"; ctx.fillRect(x+w/2-2, y+h-6, 6, 7);
+}
+// 坦克：履带 + 负重轮 + 斜切前装甲 + 圆炮塔 + 受限仰角主炮（第二关炮台）
+function drawTank(e, x, y){
+  const w = e.w, h = e.h, gd = e.face || 1;
+  const body = "#3a4735", bodyHi = "#516049", bodyLo = "#27311f";
+  // 地面阴影
+  ctx.globalAlpha=.32; ctx.fillStyle="#000";
+  ctx.beginPath(); ctx.ellipse(x+w/2, y+h+2, w*0.52, 6, 0, 0, 7); ctx.fill(); ctx.globalAlpha=1;
+  // ---- 履带 ----
+  ctx.fillStyle="#14181d"; ctx.fillRect(x+2, y+h-20, w-4, 20);
+  ctx.fillStyle="#20262d"; ctx.fillRect(x+4, y+h-18, w-8, 15);
+  ctx.fillStyle="#39434e";
+  const off = (((e.tread||0) % 12) + 12) % 12;
+  for(let tx = x+4-off; tx < x+w-8; tx += 12){
+    ctx.fillRect(tx, y+h-19, 6, 4);
+    ctx.fillRect(tx, y+h-6, 6, 4);
+  }
+  // 负重轮
+  for(let i=0;i<5;i++){
+    const cx = x+16 + i*(w-32)/4, cy = y+h-11;
+    ctx.fillStyle="#252c34"; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.fill();
+    ctx.fillStyle="#4a5663"; ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, 7); ctx.fill();
+    ctx.fillStyle="#6d7b88"; ctx.beginPath(); ctx.arc(cx-1.6, cy-1.6, 1.7, 0, 7); ctx.fill();
+  }
+  // ---- 车体（前装甲斜切）----
+  ctx.fillStyle=body;
+  ctx.beginPath();
+  ctx.moveTo(x+4, y+34); ctx.lineTo(x+6, y+14);
+  ctx.lineTo(x+w-22, y+14); ctx.lineTo(x+w-4, y+26); ctx.lineTo(x+w-4, y+34);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle=bodyHi; ctx.fillRect(x+8, y+14, w-32, 3);        // 上装甲高光
+  ctx.fillStyle=bodyLo; ctx.fillRect(x+6, y+30, w-14, 6);        // 侧裙板
+  ctx.fillStyle="#33402c"; ctx.fillRect(x+6, y+30, w-14, 2);
+  // 前部装甲块 / 工具箱
+  ctx.fillStyle="#2d3828"; ctx.fillRect(x+w-30, y+18, 15, 9);
+  ctx.fillStyle="#55634b"; ctx.fillRect(x+w-30, y+18, 15, 2);
+  // 铆钉
+  ctx.fillStyle="#5d6b57";
+  for(let rx=x+12; rx<x+w-28; rx+=16) ctx.fillRect(rx, y+23, 2, 2);
+  // 天线
+  ctx.strokeStyle="#8b939a"; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(x+12, y+14); ctx.lineTo(x+5+Math.sin(e.t*0.06)*2, y-18); ctx.stroke();
+  // ---- 炮塔 ----
+  const cx = x+w/2, cy = y+14;
+  // 主炮（仰角受限）
+  const ga = e.gunA || 0;
+  const rec = e.recoil>0 ? e.recoil*0.9 : 0;
+  ctx.save();
+  ctx.translate(cx + gd*(12 - rec*0.5), cy - 1);
+  ctx.scale(gd,1); ctx.rotate(ga*gd);
+  ctx.fillStyle="#1c211a"; ctx.fillRect(0, -6, 54, 12);          // 炮管
+  ctx.fillStyle="#39452f"; ctx.fillRect(0, -6, 54, 3);
+  ctx.fillStyle="#2a3326"; ctx.fillRect(50, -8, 13, 16);         // 制退器
+  ctx.fillStyle="#0d110c"; ctx.fillRect(61, -4.5, 5, 9);
+  ctx.fillStyle="#4a5642"; ctx.fillRect(2, -8.4, 7, 3.6);        // 排烟器
+  ctx.restore();
+  // 炮塔壳体
+  ctx.fillStyle="#2c3729"; ctx.beginPath(); ctx.ellipse(cx, cy+2, 28, 15, 0, 0, 7); ctx.fill();
+  ctx.fillStyle="#46543c"; ctx.beginPath(); ctx.ellipse(cx, cy, 26, 14, 0, 0, 7); ctx.fill();
+  ctx.fillStyle="#556549"; ctx.beginPath(); ctx.ellipse(cx-4, cy-4, 17, 8, 0, 0, 7); ctx.fill();
+  // 舱盖
+  ctx.fillStyle="#2f3b2b"; ctx.beginPath(); ctx.ellipse(cx-9, cy-5, 10, 7, 0, 0, 7); ctx.fill();
+  ctx.fillStyle="#5c6c4e"; ctx.beginPath(); ctx.ellipse(cx-9, cy-6, 7.5, 5, 0, 0, 7); ctx.fill();
+  // 观察窗（瞄准时红色发亮）
+  ctx.fillStyle = e.cd < 24 ? "#ff3b1f" : "#8b2a12";
+  ctx.fillRect(cx + gd*13 - 2, cy - 5, 5, 3);
+  // 车体编号
+  ctx.fillStyle="#8d9a7c"; ctx.font="bold 8px monospace";
+  ctx.fillText("T-72", x+14, y+27);
+  // 炮口焰
+  if(e.recoil > 6){
+    ctx.globalAlpha=.85; ctx.fillStyle="#ffe58a";
+    ctx.beginPath(); ctx.arc(cx + gd*70, cy - 1 + Math.sin(ga)*40, 8, 0, 7); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+  // 排气烟
+  if(e.vx){
+    ctx.globalAlpha=.30; ctx.fillStyle="#9aa0a8";
+    const px = x + (e.vx > 0 ? 2 : w-6);
+    ctx.fillRect(px, y + 20 - (e.t%18)*0.6, 4, 4);
+    ctx.globalAlpha=1;
+  }
 }
 // 滚轮炮台：装甲炮身 + 两个大轮子（滚动动画）+ 前伸炮管
 function drawRoller(e, x, y){
@@ -1969,7 +2223,8 @@ function drawSoldier(e){
   const x=e.x-cam, y=e.y, t=(e.animT+=0.3);
   // ----- 巡逻无人机 -----
   if(e.kind==="drone"){ drawDrone(e, x, y); return; }
-  // ----- 滚轮炮台 / 天花板摄像头 -----
+  // ----- 滚轮炮台 / 坦克 / 天花板摄像头 -----
+  if(e.kind==="tank"){ drawTank(e, x, y); return; }
   if(e.kind==="roller"){ drawRoller(e, x, y); return; }
   if(e.kind==="cam"){ drawCam(e, x, y); return; }
   // ----- 工事类 -----
@@ -1986,10 +2241,19 @@ function drawSoldier(e){
         // 士兵抬头（前 20 帧升起、后 20 帧蹲回）
         const rise = Math.min(1, Math.min(e.up, 120-e.up)/20);
         const sy = y - rise*26;
-        ctx.fillStyle="#c9a17a"; ctx.fillRect(x+18, sy, 12, 10);        // 头
-        ctx.fillStyle="#3d4a26"; ctx.fillRect(x+16, sy-4, 16, 5);       // 头盔
-        ctx.fillStyle="#5a6a3a"; ctx.fillRect(x+16, sy+10, 16, 10);     // 肩
-        ctx.fillStyle="#333";    ctx.fillRect(x+28, sy+8, 18, 3);       // 枪
+        ctx.fillStyle="#4d5c34"; ctx.fillRect(x+14, sy+12, 20, 11);      // 肩背
+        ctx.fillStyle="#62743f"; ctx.fillRect(x+14, sy+12, 20, 2);
+        ctx.fillStyle="#2f3a23"; ctx.fillRect(x+16, sy+15, 16, 6);      // 背心
+        ctx.fillStyle="#c9a17a"; ctx.fillRect(x+18, sy+2, 12, 10);      // 脸
+        ctx.fillStyle="#b08a63"; ctx.fillRect(x+28, sy+4, 2, 7);
+        ctx.fillStyle="#3a4526";                                        // 钢盔
+        ctx.beginPath(); ctx.arc(x+24, sy+2.6, 8, Math.PI, 0); ctx.fill();
+        ctx.fillRect(x+15.5, sy+2, 17, 2.4);
+        ctx.fillStyle="#2b351c"; ctx.fillRect(x+15, sy+4.2, 18, 1.6);   // 盔檐
+        ctx.fillStyle="#1c1f18"; ctx.fillRect(x+25, sy+5.6, 3, 2);      // 眼
+        ctx.fillStyle="#1c1f22"; ctx.fillRect(x+28, sy+9, 16, 3.2);     // 枪
+        ctx.fillStyle="#2f353b"; ctx.fillRect(x+28, sy+9, 16, 1.2);
+        ctx.fillStyle="#14171a"; ctx.fillRect(x+42, sy+8.4, 4, 2.2);
       }
       return;
     }
@@ -2037,37 +2301,104 @@ function drawSoldier(e){
     return;
   }
   if(e.kind==="turret"){
-    // 特殊炮台（青色，温和版）与普通炮台（灰红，扇形散射）
-    ctx.fillStyle = e.sp ? "#1f6f6f" : "#3a3f4a"; ctx.fillRect(x, y+14, e.w, e.h-14);
-    ctx.fillStyle = e.sp ? "#3aa8a0" : "#565e6e"; ctx.fillRect(x+4, y+18, e.w-8, 8);
-    ctx.fillStyle="#22262e"; ctx.fillRect(x+e.w/2-4, y, 8, 16);
-    ctx.fillStyle = e.sp ? "#1a5a56" : "#88332a"; ctx.beginPath(); ctx.arc(x+e.w/2, y, 7, 0, 7); ctx.fill();
+    // 固定炮台：三脚底座 + 可旋转炮塔 + 长炮管（特殊炮台为青色）
+    const cx = x + e.w/2, cy = y + 21, sp = e.sp;
+    const c1 = sp ? "#1d6a68" : "#3a3f4a",
+          c2 = sp ? "#3aa8a0" : "#5a6370",
+          c3 = sp ? "#124b48" : "#232830";
+    ctx.globalAlpha=.3; ctx.fillStyle="#000";
+    ctx.beginPath(); ctx.ellipse(cx, y+e.h+1, 24, 5, 0, 0, 7); ctx.fill(); ctx.globalAlpha=1;
+    // 三脚支架
+    ctx.fillStyle=c3;
+    ctx.beginPath();
+    ctx.moveTo(cx-4, cy+2); ctx.lineTo(cx+4, cy+2);
+    ctx.lineTo(cx+22, y+e.h); ctx.lineTo(cx+12, y+e.h);
+    ctx.lineTo(cx, cy+11); ctx.lineTo(cx-12, y+e.h); ctx.lineTo(cx-22, y+e.h);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle=c1; ctx.fillRect(cx-3, cy+2, 6, 15);
+    // 圆盘底座
+    ctx.fillStyle=c1; ctx.beginPath(); ctx.ellipse(cx, cy+3, 16, 6.2, 0, 0, 7); ctx.fill();
+    ctx.fillStyle=c2; ctx.beginPath(); ctx.ellipse(cx, cy+2, 16, 4.6, 0, 0, 7); ctx.fill();
+    // 炮管（实时跟随主角）
+    const ang = Math.atan2(chestY() - (cy-2), (player.x+player.w/2) - cx);
+    ctx.save(); ctx.translate(cx, cy-2); ctx.rotate(ang);
+    ctx.fillStyle=c3; ctx.fillRect(0, -5, 26, 10);
+    ctx.fillStyle=c2; ctx.fillRect(0, -5, 26, 2.6);
+    ctx.fillStyle="#101418"; ctx.fillRect(25, -6.5, 8, 13);      // 炮口制退器
+    ctx.fillStyle="#000"; ctx.fillRect(31, -3, 3, 6);
+    ctx.restore();
+    // 转塔（半圆罩）
+    ctx.fillStyle=c1; ctx.beginPath(); ctx.arc(cx, cy-2, 14, Math.PI, 0); ctx.fill();
+    ctx.fillRect(cx-14, cy-3, 28, 7);
+    ctx.fillStyle=c2; ctx.beginPath(); ctx.arc(cx, cy-3, 11, Math.PI, 0); ctx.fill();
+    // 侧面弹药箱
+    ctx.fillStyle="#2c333b"; ctx.fillRect(cx+10, cy+5, 11, 9);
+    ctx.fillStyle=c2; ctx.fillRect(cx+10, cy+5, 11, 2);
+    // 状态灯
     if(!e.dead){
       const blink = Math.floor(t/15)%2===0;
-      ctx.fillStyle = e.sp ? (blink?"#5afff0":"#1a8a80") : (blink?"#ff5b3d":"#802a1a");
-      ctx.fillRect(x+e.w/2-2, y-2, 4, 4);
+      ctx.fillStyle = sp ? (blink?"#5afff0":"#1a8a80") : (blink?"#ff5b3d":"#802a1a");
+      ctx.fillRect(cx-2, cy-13, 4, 4);
     }
     return;
   }
-  // 士兵
+  // ----- 士兵（冲锋兵 / 自爆兵 / 狙击手）-----
   const run = e.mode==="runner" || e.mode==="bomber";
-  const bob = run?Math.sin(t*0.5)*1.5:0;
-  ctx.save(); ctx.translate(x+e.w/2, y+bob);
-  const dir = (player.x > e.x)?1:-1; ctx.scale(dir,1); ctx.translate(-e.w/2,0);
-  const bodyCol = e.mode==="bomber" ? "#b0431f" : "#5a6a3a";
-  const helmCol = e.mode==="bomber" ? "#5a1a10" : "#3d4a26";
-  ctx.fillStyle=bodyCol;
-  if(run){ const lo=Math.sin(t*0.5)*5; ctx.fillRect(3,26,7,14+lo*0.4); ctx.fillRect(13,26,7,14-lo*0.4); }
-  else { ctx.fillRect(3,26,7,14); ctx.fillRect(13,26,7,14); }
-  ctx.fillRect(2,12,19,14);
-  ctx.fillStyle="#c9a17a"; ctx.fillRect(6,3,11,9);
-  ctx.fillStyle=helmCol; ctx.fillRect(4,0,15,4); // 头盔
-  if(e.mode==="bomber"){
-    // 胸前引信灯：快速闪烁预警
-    ctx.fillStyle = (Math.floor(t/6)%2)?"#ffe86b":"#ff2200";
-    ctx.fillRect(9,16,6,5);
+  const bob = run ? Math.abs(Math.sin(t*0.5))*1.6 : 0;
+  const dir = (player.x > e.x)?1:-1;
+  ctx.save(); ctx.translate(x+e.w/2, y+bob); ctx.scale(dir,1); ctx.translate(-e.w/2,0);
+  const isB = e.mode==="bomber";
+  const uni   = isB ? "#a83e1c" : "#4d5c34";
+  const uniHi = isB ? "#cb5624" : "#62743f";
+  const uniLo = isB ? "#6d2610" : "#333f26";
+  const vest  = isB ? "#5b1c0d" : "#2f3a23";
+  const sw = run ? Math.sin(t*0.5) : 0;
+  // 后腿
+  ctx.fillStyle=uniLo; ctx.fillRect(12 + sw*2, 25, 6.5, 12);
+  ctx.fillStyle="#12140f"; ctx.fillRect(11 + sw*2, 35, 8, 5);
+  // 前腿
+  ctx.fillStyle=uni;   ctx.fillRect(4 - sw*2, 25, 7, 12);
+  ctx.fillStyle=uniHi; ctx.fillRect(4 - sw*2, 25, 2.4, 12);
+  ctx.fillStyle="#171a12"; ctx.fillRect(3 - sw*2, 35, 9, 5);
+  // 躯干 + 高光
+  ctx.fillStyle=uni;   ctx.fillRect(2.5, 11, 18, 14);
+  ctx.fillStyle=uniHi; ctx.fillRect(2.5, 11, 18, 2.4);
+  // 防弹背心
+  ctx.fillStyle=vest; ctx.fillRect(4.5, 13, 14, 9);
+  ctx.fillStyle="#46512f"; ctx.fillRect(6, 15, 11, 1.6);
+  // 自爆兵：胸挂炸药 + 快速闪烁引信灯
+  if(isB){
+    ctx.fillStyle="#3a2a12"; ctx.fillRect(6,17.5,7,6);
+    ctx.fillStyle="#c9a44a"; ctx.fillRect(7,18.5,5,1.2);
+    ctx.fillStyle = (Math.floor(t/6)%2) ? "#ffe86b" : "#ff2200";
+    ctx.fillRect(14,16,4,4);
+  }
+  // 弹匣袋 / 腰带
+  ctx.fillStyle=uniLo; ctx.fillRect(6,20.5,4,3.6); ctx.fillRect(11,20.5,4,3.6);
+  ctx.fillStyle="#22261a"; ctx.fillRect(2.5, 24, 18, 2.6);
+  // 肩章
+  ctx.fillStyle=isB?"#ffb347":"#8a9a5e"; ctx.fillRect(3,11.4,5,2);
+  // 后臂
+  ctx.fillStyle=uniLo; ctx.fillRect(1.5,12,4.5,8.5);
+  // 头 + 钢盔（盔顶弧 + 盔檐）
+  ctx.fillStyle="#c9a17a"; ctx.fillRect(5.5,2.5,11,9.5);
+  ctx.fillStyle="#b08a63"; ctx.fillRect(14,4.5,2,6.5);
+  ctx.fillStyle=isB?"#6b1e0c":"#3a4526";
+  ctx.beginPath(); ctx.arc(11, 3.6, 7.6, Math.PI, 0); ctx.fill();
+  ctx.fillRect(3.4, 3.2, 15.2, 2.6);
+  ctx.fillStyle=isB?"#8a2a12":"#4d5c34";
+  ctx.fillRect(3, 5.4, 16, 1.8);                    // 盔檐
+  ctx.fillStyle="#1c1f18"; ctx.fillRect(11, 6.8, 3.4, 2.2);  // 护目镜阴影
+  if(isB){ ctx.fillStyle="#2a1a12"; ctx.fillRect(5.5, 8.4, 11, 3); }  // 面罩
+  // 武器
+  if(!isB){
+    ctx.fillStyle="#1c1f22"; ctx.fillRect(13, 14, 13, 3.4);
+    ctx.fillStyle="#2f353b"; ctx.fillRect(13, 14, 13, 1.2);
+    ctx.fillStyle="#14171a"; ctx.fillRect(24, 13.2, 5, 2.2);   // 枪口
+    ctx.fillStyle="#2a2f34"; ctx.fillRect(15, 17, 3, 4);       // 弹匣
+    if(e.mode==="sniper"){ ctx.fillStyle="#3d454d"; ctx.fillRect(17, 11.4, 7, 2.4); }
   } else {
-    ctx.fillStyle="#333"; ctx.fillRect(15,14,12,4);  // 枪
+    ctx.fillStyle="#2a1f10"; ctx.fillRect(15, 16, 4, 7);       // 手提炸药包
   }
   ctx.restore();
 }

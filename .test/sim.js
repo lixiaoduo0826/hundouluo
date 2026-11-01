@@ -62,6 +62,9 @@ globalThis.__D = {
   setCam(v){cam=v}, get W(){return W}, get H(){return H},
   get crates(){return crates}, get redPools(){return redPools}, get debris(){return debris},
   get finalRun(){return finalRun}, killCore, startAftermath, startFinalRun, makeBoss,
+  get liquid(){return liquid}, get fleeSquad(){return fleeSquad}, get holes(){return holes},
+  get runExitX(){return runExitX}, get runStartX(){return runStartX},
+  respawnInRun, hurtPlayer,
   get score(){return score}, set score(v){score=v},
 };
 `;
@@ -546,40 +549,103 @@ for (let i=0;i<520;i++){ step(1); if (D.LEVEL_IDX === 3 && D.state === "play") {
 ok("红液逼近后自动进入第三关", autoTo3 && D.finalRun === true,
    "关卡 " + D.LEVEL_IDX + " state=" + D.state + " finalRun=" + D.finalRun);
 
-// 红液接触即死
-step(120);
-const pool0 = D.redPools[0];
-const p3 = D.p;
-p3.x = pool0.x + 20; p3.y = pool0.y - p3.h + 2; p3.onGround = true; p3.inv = 0; p3.dead = false;
-const livesA = D.lives;
-step(2);
-ok("碰到红液立刻死掉（掉一条命）", D.lives < livesA, "命 " + livesA + " → " + D.lives);
+// 红液接触即死（过场结束时就已切到第三关，这里检查过场里的液面蔓延）
+// ===== 第三关：反向逃生 =====
+console.log("\n【18b】第三关：掉头往出口跑，红液在后面追");
+clearKeys(); step(2);
+const p3 = D.p, L3 = D.liquid;
+ok("第三关在反应堆旁起跑", p3.x > D.runStartX - 60 && p3.x < D.runStartX + 60,
+   "x=" + p3.x.toFixed(0) + " 开始位=" + D.runStartX);
+ok("红液浪头就在身后", L3 && L3.x > p3.x, "液面 x=" + (L3 ? L3.x.toFixed(0) : "无") + " 主角 x=" + p3.x.toFixed(0));
+ok("出口在左前方很远处", D.runExitX < p3.x - 2000, "出口 x=" + D.runExitX + " 距离 " + (p3.x - D.runExitX).toFixed(0) + "px");
+ok("有一群士兵一起逃命", D.fleeSquad.length >= 8, "同跑士兵 " + D.fleeSquad.length + " 人");
+const fx0 = D.fleeSquad.map(s => s.x).reduce((a,b)=>a+b,0) / D.fleeSquad.length;
+const lvRun = D.lives;
+key("ArrowLeft");
+step(150);
+ok("主角往左跑（向后撤离）", D.p.vx < -1 || D.p.x < p3.x - 100, "x " + p3.x.toFixed(0) + " → " + D.p.x.toFixed(0));
+const fx1 = D.fleeSquad.filter(s=>!s.dead).map(s => s.x);
+ok("士兵也跟着往左跑", fx1.length && (fx1.reduce((a,b)=>a+b,0)/fx1.length) < fx0 - 120,
+   "平均 x " + fx0.toFixed(0) + " → " + (fx1.length ? (fx1.reduce((a,b)=>a+b,0)/fx1.length).toFixed(0) : "-"));
+ok("跑动中没被液面追上（还活着）", D.lives === lvRun && D.state === "play",
+   "命 " + lvRun + " → " + D.lives + " state=" + D.state);
 
-// 工厂碎片砸断栈桥
-step(30);
-D.debris.length = 0;
-const pl0 = D.platforms.find(pl => !pl.dead);
+// 站着不动 → 液面追上就死
+clearKeys();
+let caught = false, caughtAt = 0;
+for (let i = 0; i < 700; i++) { step(1); if (D.lives < lvRun) { caught = true; caughtAt = i; break; } }
+ok("停住不动会被液面吞掉", caught, "第 " + caughtAt + " 帧被追上，命 " + lvRun + " → " + D.lives);
+ok("被吞后重生在液面前方", D.liquid && D.p.x + D.p.w < D.liquid.x,
+   "主角 x=" + D.p.x.toFixed(0) + " 液面 x=" + D.liquid.x.toFixed(0));
+
+// 落后的小兵会被液面卷走
+key("ArrowLeft"); step(6); clearKeys();
+const f0 = D.fleeSquad.length;
+if (D.fleeSquad.length) { D.fleeSquad[0].x = D.liquid.x + 4; D.fleeSquad[0].dead = false; }
+step(4);
+ok("被追上的士兵会被吞掉", D.fleeSquad.length < f0 || D.fleeSquad.some(s => s.dead),
+   "士兵 " + f0 + " → " + D.fleeSquad.length);
+
+// 碎片砸穿地板 → 裂缝预警 → 塌出洞
+D.debris.length = 0; D.holes.length = 0;
 const pHP = D.p;
-pHP.x = pl0.x + 40; pHP.y = 200; pHP.onGround = false; pHP.inv = 999;
-D.debris.push({x: pl0.x + pl0.w/2, y: pl0.y - 30, w: 30, h: 22, vy: 4, vx: 0,
-               rot: 0, spin: 0, tgt: pl0, dead:false, t:0});
-let cracked = false;
-for (let i=0;i<10;i++){ step(1); if (pl0.crackT > 0) { cracked = true; break; } }
-ok("碎片砸中栈桥 → 桥面出现裂缝", cracked && pl0.crackT > 0,
-   "crackT=" + pl0.crackT + "（约 " + (pl0.crackT/60).toFixed(1) + " 秒后断裂）");
-ok("给出约 2 秒逃生时间", pl0.crackT >= 100 && pl0.crackT <= 120, "crackT=" + pl0.crackT);
-let brokeAt = -1;
-for (let i=0;i<160;i++){ step(1); pHP.inv = 999; if (pl0.dead) { brokeAt = i+1; break; } }
-ok("倒计时结束栈桥断掉", pl0.dead === true, "第 " + brokeAt + " 帧断裂");
+pHP.x = 7000; pHP.y = D.groundYAt(7011) - pHP.h; pHP.onGround = true; pHP.inv = 999;
+D.setCam(6600);
+const gyH = D.groundYAt(6800);
+D.debris.push({x: 6800, y: gyH - 46, w: 30, h: 22, vy: 6, vx: 0, rot: 0, spin: 0, tgt: null, dead:false, t:0});
+let holed = false;
+for (let i=0;i<8;i++){ step(1); if (D.holes.length) { holed = true; break; } }
+ok("碎片砸地 → 地板出现裂缝（先预警）", holed && D.holes[0].crackT > 0,
+   D.holes.length ? "crackT=" + D.holes[0].crackT + "（约 " + (D.holes[0].crackT/60).toFixed(1) + " 秒）" : "没砸出裂缝");
+ok("裂缝阶段地板还没塌（能踩）", D.groundYAt(6800) < Infinity, "地面 y=" + D.groundYAt(6800).toFixed(0));
+let holeAt = -1;
+for (let i=0;i<140;i++){ step(1); pHP.inv = 999; if (D.groundYAt(6800) === Infinity) { holeAt = i+1; break; } }
+ok("倒计时结束后地板塌成洞", holeAt > 0, "第 " + holeAt + " 帧塌陷");
 
-// 冲到出口 → 逃出演出 → 通关画面
-const coreX = D.boss.core.x;
-const pEnd = D.p;
-pEnd.x = coreX - 60; pEnd.y = D.groundYAt(pEnd.x+11) - pEnd.h; pEnd.onGround = true; pEnd.inv = 999;
-step(3);
-ok("到达破口触发逃出演出", D.state === "escape", "state=" + D.state);
-step(300);
+// 冲到左端逃生门 → 逃出演出 → 通关
+clearKeys();
+const pe = D.p;
+pe.x = D.runExitX + 40; pe.y = D.groundYAt(pe.x+11) - pe.h; pe.vy = 0; pe.onGround = true; pe.inv = 999;
+key("ArrowLeft");
+step(20);
+ok("冲进逃生门触发逃出演出", D.state === "escape", "state=" + D.state);
+step(320);
 ok("工厂倒塌后通关", D.state === "win" && D.LEVEL_IDX === 3, "state=" + D.state + " 关卡 " + D.LEVEL_IDX);
+
+// ================= 关卡切换：第三关残留必须被清干净 =================
+console.log("\n【5e】阵亡重开清场");
+clearKeys();
+D.startGame();
+step(2);
+const baseGround = [];
+for (let x = 0; x < D.LEVEL_W; x += 25) baseGround.push(D.groundYAt(x));
+// 进第三关，跑一会儿，再补一个"已塌陷"的坑（真实情况由碎片砸地产生）
+D.startFinalRun();
+step(30);
+D.holes.push({ x: 3000, w: 70, y: D.groundYAt(3005), crackT: 0 });
+const beforeHole = D.holes.length, beforeFlee = D.fleeSquad.length;
+ok("第三关里确实有液面/逃命士兵/坑洞", beforeHole > 0 && beforeFlee > 0 && !!D.liquid,
+   "坑 " + beforeHole + " 士兵 " + beforeFlee + " 液面 " + (D.liquid ? "有" : "无"));
+// 把命耗光 → over（模拟第三关阵亡）
+D.lives = 0; D.p.inv = 0; D.p.dead = false;
+D.hurtPlayer(true);
+ok("阵亡后进入游戏结束", D.state === "over", "state=" + D.state);
+// 重开：从第一关开始
+D.startGame();
+step(2);
+ok("重开后液面被清空", D.liquid === null, "liquid=" + D.liquid);
+ok("重开后逃命士兵被清空", D.fleeSquad.length === 0, "剩下 " + D.fleeSquad.length + " 人");
+ok("重开后坑洞被清空", D.holes.length === 0, "剩下 " + D.holes.length + " 个");
+ok("重开后碎片/红液洼地/逃生段标记被清空",
+   D.debris.length === 0 && D.redPools.length === 0 && D.finalRun === false,
+   "debris=" + D.debris.length + " redPools=" + D.redPools.length + " finalRun=" + D.finalRun);
+let diffN = 0, firstDiff = -1;
+for (let i = 0; i < baseGround.length; i++) {
+  const x = i * 25;
+  if (D.groundYAt(x) !== baseGround[i]) { diffN++; if (firstDiff < 0) firstDiff = x; }
+}
+ok("重开后第一关地形与初始完全一致（没有隐形空洞）", diffN === 0,
+   diffN ? diffN + " 处不一致，首个 x=" + firstDiff : "全部一致 " + baseGround.length + " 个采样点");
 
 // ================= 渲染不报错 =================
 console.log("\n【6】渲染");

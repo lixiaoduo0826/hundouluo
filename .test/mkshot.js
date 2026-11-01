@@ -102,6 +102,34 @@ window.addEventListener("load", () => {
       debris.push({x: 2160, y: 140, w: 34, h: 24, vy: 5, vx:0, rot: 0.6, spin:0.1, tgt:null, dead:false, t:20});
       debris.push({x: 2300, y: 60, w: 46, h: 30, vy: 4, vx:0, rot: 1.4, spin:-0.12, tgt:null, dead:false, t:12});
       debris.push({x: 2450, y: 200, w: 26, h: 18, vy: 6, vx:0, rot: 2.2, spin:0.16, tgt:null, dead:false, t:8});
+    } else if (mode === "run") {
+      // 第三关逃亡现场：主角往左跑，红液在后面追，一队士兵跟着跑
+      startFinalRun();
+      state = "play"; stateTimer = 0; bannerT = 0;
+      const p2 = player;
+      p2.x = 8420; p2.y = groundYAt(8431) - p2.h; p2.onGround = true;
+      p2.face = -1; p2.inv = 0; p2.animT = 14; p2.aimAng = 0;
+      cam = Math.max(0, p2.x - W*0.55);
+      liquid.x = p2.x + 390;
+      fleeSquad.length = 0;
+      for (let i=0;i<9;i++) spawnFlee(p2.x - 30 + i*52 + Math.random()*16);
+      debris.length = 0;
+      debris.push({x: p2.x - 250, y: 120, w: 38, h: 26, vy: 5, vx:0, rot: 0.7, spin:0.1, tgt:null, dead:false, t:20});
+      debris.push({x: p2.x + 260, y: 60,  w: 46, h: 28, vy: 5, vx:0, rot: 1.9, spin:-0.1, tgt:null, dead:false, t:16});
+      holes.length = 0;
+      holes.push({x: p2.x - 330, w: 78, y: groundYAt(p2.x - 300), crackT: 42, seed: 3});
+      holes.push({x: p2.x + 190, w: 72, y: groundYAt(p2.x + 220), crackT: 0, seed: 1});
+    } else if (mode === "exit") {
+      // 第三关：冲向左端逃生门
+      startFinalRun();
+      state = "play"; stateTimer = 0; bannerT = 0;
+      const p3 = player;
+      p3.x = runExitX + 210; p3.y = groundYAt(p3.x + 11) - p3.h; p3.onGround = true;
+      p3.face = -1; p3.inv = 0; p3.animT = 8; p3.aimAng = 0;
+      cam = Math.max(0, p3.x - W*0.55);
+      liquid.x = p3.x + 700;
+      fleeSquad.length = 0;
+      for (let i=0;i<6;i++) spawnFlee(p3.x - 20 + i*58);
     } else if (mode === "tankshell") {
       nextLevel(); state = "play"; stateTimer = 0; bannerT = 0;
       enemies.length = 0; ebullets.length = 0;
@@ -119,6 +147,20 @@ window.addEventListener("load", () => {
       p.face = -1; p.aimAng = 0; p.inv = 0;
       const tk = makeTank(2700); tk.spot = 22; tk.alerted = false;
       enemies.push(tk);
+    } else if (mode === "restart") {
+      // 复现 BUG：第三关阵亡 → 从第一关重开，画面里不该再有红液浪头 / 逃命士兵 / 坑洞
+      startFinalRun();
+      for (let i = 0; i < 40; i++) { player.inv = 999; update(); }
+      holes.push({ x: 3000, w: 70, y: groundYAt(3005), crackT: 0 });
+      lives = 0; player.inv = 0; player.dead = false;
+      hurtPlayer(true);
+      startGame();
+      state = "play"; stateTimer = 0; bannerT = 0;
+      for (let i = 0; i < 40; i++) update();
+      enemies.length = 0; ebullets.length = 0; bullets.length = 0;
+      player.x = 900; player.y = groundYAt(911) - player.h;
+      player.inv = 0; player.face = 1; player.aimAng = 0;
+      cam = 520;
     } else if (mode === "turret") {
       place(600); cam = 430;
       enemies.push(makeTurret(760, groundYAt(760)-40, false));

@@ -478,6 +478,12 @@ let crates = buildCrates(L1_CRATES_X);
 function loadLevel(n){
   LEVEL_IDX = n;
   drops = [];
+  // ★ 每一关都是一次全新开始：先把上一局（尤其是第三关逃生段）留下的临时状态清干净。
+  //   否则在第三关阵亡后重开第一关时，红液浪头、逃命士兵、塌陷坑洞会残留下来，
+  //   坑洞还会让 groundYAt() 在第一关地形上返回 Infinity（看不见却会掉下去的空洞）。
+  holes = []; fleeSquad = []; liquid = null;
+  redPools = []; debris = []; debrisT = 0; finalRun = false;
+  ironBalls = []; runExitX = 0; runStartX = 0;
   if(n === 1){
     LEVEL_W = L1_W; terrainPieces = L1_TERRAIN; platforms = L1_PLATFORMS;
     checkpoints = L1_CHECKPOINTS; triggers = L1_TRIGGERS; conveyors = L1_CONVEYORS;
@@ -490,7 +496,6 @@ function loadLevel(n){
     conveyors = [];                                        // 断电：传送带全停
     platforms = L2_PLATFORMS.map(pl => ({...pl, crackT: 0, dead: false}));
     triggers = [];                                         // 一路只剩逃命的兵，不再刷敌人
-    holes = []; fleeSquad = []; liquid = null;
     powerups = L2_POWERUPS.map(o => ({...o, taken:false, bob:0}));
     medals   = L2_MEDALS.map(o => ({...o, taken:false, bob:0}));
     crates   = buildCrates(L2_CRATES_X).concat(buildPackages(L2_PACKAGES_X));

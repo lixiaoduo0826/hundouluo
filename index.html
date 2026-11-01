@@ -103,10 +103,6 @@ const BGM = {
 const keys = {};
 window.addEventListener("keydown", e => {
   keys[e.code] = true;
-  // ↑（或 W）按下：抬枪朝正上方（可边走边打）
-  if(e.code==="ArrowUp" || e.code==="KeyW"){
-    if(typeof player!=="undefined" && player) player.aimLatch = 90;
-  }
   if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
   if(e.code==="KeyM"){ BGM.muted = !BGM.muted; if(userBgm) userBgm.muted = BGM.muted; }  // M 键 BGM 静音开关
   if(e.code === "Enter") gameState.onEnter();
@@ -520,11 +516,14 @@ let runExitX = 0, runStartX = 0;   // 第三关：逃生门位置 / 起跑位置
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
 let autoSpawnT = 0, bannerT = 0;
 
-function resetPlayer(x){
+// 重置主角。keepGear=true 时保留上一关带过来的武器与等级（关卡切换不掉枪）
+function resetPlayer(x, keepGear){
+  const kw = (keepGear && player) ? player.weapon : "N";
+  const kl = (keepGear && player) ? {...player.wlv} : {S:0,M:0,L:0,B:0};
   player = {
     x:x, y:groundYAt(x+11)-38, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
-    fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, animT:0, dead:false,
+    fireCd:0, weapon:kw, wlv:kl, aimAng:0, animT:0, dead:false,
     slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
     rolling:false, rollAng:0, rollDir:1, landT:0,
     platY:null, dropY:null,          // 脚下栈桥高度 / 正在下穿的桥面高度
@@ -824,7 +823,7 @@ function nextLevel(){
   loadLevel(2);
   makeBoss(2);
   lives = Math.max(lives, 1) + 2;
-  resetPlayer(60);
+  resetPlayer(60, true);                              // ★ 武器带到下一关
   player.inv = 90;
   state="play"; stateTimer=0; bannerT=170;
   BGM.start();
@@ -879,9 +878,7 @@ function startFinalRun(){
   finalRun = true; debrisT = 130;
   runExitX = 6240; runStartX = 8840;
   lives = Math.max(lives, 1) + 1;                     // 逃生段多给一条命
-  const keepW = player.weapon, keepLv = {...player.wlv};
-  resetPlayer(runStartX);
-  player.weapon = keepW; player.wlv = keepLv;         // 逃命路上不掉武器
+  resetPlayer(runStartX, true);                       // ★ 枪和等级继续带着往出口跑
   player.face = -1; player.inv = 120;
   checkpoint = runExitX + 40;
   cam = Math.max(0, Math.min(runStartX - W*0.55, LEVEL_W - W));
@@ -1065,11 +1062,9 @@ function updateFleeSquad(p){
 // 逃命段的重生：放在浪头前方，液面被震退一点，避免刚站起来又被吞
 function respawnInRun(){
   const p = player;
-  const keepW = p.weapon, keepLv = {...p.wlv};
   const front = liquid ? liquid.x : p.x + 400;
   const rx = Math.max(80, front - 430);
-  resetPlayer(rx);
-  player.weapon = keepW; player.wlv = keepLv;
+  resetPlayer(rx, true);                              // 逃命段重生也不掉枪
   player.face = -1; player.inv = 150;
   if(liquid){ liquid.x = rx + 360; liquid.speed = Math.max(1.5, liquid.speed - 0.35); }
   cam = Math.max(0, Math.min(rx - W*0.55, LEVEL_W - W));
@@ -1311,11 +1306,9 @@ function update(){
   // 掉进水坑 / 掉出屏幕
   if(p.y > H + 60){ hurtPlayer(true); }
 
-  // 瞄准方向：按住 ↑ = 抬枪朝正上方（蹲下/滑铲时压枪平射）
-  if(kUp()) p.aimLatch = 75;
-  else if(p.aimLatch > 0) p.aimLatch--;
+  // 瞄准方向：按住 ↑ 才抬枪朝正上方，手指一松立刻回到平射（不再有延迟残留）
   p.aimAng = 0;
-  const aimingUp = p.aimLatch > 0 && !kDown();
+  const aimingUp = kUp() && !kDown();
   if(aimingUp) p.aimAng = -Math.PI/2;
   // 空中按住 ↓：枪口朝正下方（可对脚下开火，带朝下瞄准动画）
   if(!p.onGround && kDown() && !aimingUp) p.aimAng = Math.PI/2;
@@ -4586,7 +4579,7 @@ function drawHUD(){
   ctx.fillStyle = LEVEL_IDX===1 ? "#7fd7a0" : (LEVEL_IDX===3 ? "#ff8b7a" : "#7fbcff");
   ctx.font="bold 13px monospace";
   ctx.fillText(LEVEL_IDX===1 ? "第 1 关 · 丛林突击"
-             : LEVEL_IDX===3 ? "第 3 关 · 全线崩塌"
+             : LEVEL_IDX===3 ? "第 3 关 · 逃出基地"
              : "第 2 关 · 基地突入", 20, 54);
   // 生命（小人图标）
   for(let i=0;i<Math.max(0,lives);i++){
@@ -4644,7 +4637,7 @@ function render(){
   if(state==="insert") drawInsert();
   if(state==="title"){
     ctx.restore();
-    drawOverlay("魂斗罗", "第 1 关 · 丛林突击　→　第 2 关 · 基地突入", "#4da6ff");
+    drawOverlay("魂斗罗", "第 1 关 · 丛林突击　→　第 2 关 · 基地突入　→　第 3 关 · 逃出基地", "#4da6ff");
     return;
   }
   drawTerrain();
@@ -4675,8 +4668,8 @@ function render(){
   // 关卡开场横幅
   if(bannerT>0 && state==="play"){
     const a = Math.min(1, Math.min(bannerT, 170-bannerT)/30);
-    const bTitle = LEVEL_IDX===3 ? "第 3 关 · 全线崩塌" : "第 2 关 · 基地突入";
-    const bSub   = LEVEL_IDX===3 ? "回头跑！出口在最左边 —— 别让液面追上你" : "潜入敌军基地 —— 摧毁反应堆核心";
+    const bTitle = LEVEL_IDX===3 ? "第 3 关 · 逃出基地" : "第 2 关 · 基地突入";
+    const bSub   = LEVEL_IDX===3 ? "逃出基地 —— 回头跑！出口在最左边" : "潜入敌军基地 —— 摧毁反应堆核心";
     ctx.globalAlpha = Math.max(0, a);
     ctx.textAlign="center";
     ctx.fillStyle="#0a1018"; ctx.fillRect(0, H/2-58, W, 96);
@@ -4721,7 +4714,7 @@ function render(){
     ctx.fillStyle="#cfd8e3"; ctx.font="16px monospace";
     ctx.fillText("第一关 · 丛林突击   ✔", W/2, H/2+4);
     ctx.fillText("第二关 · 基地突入   ✔", W/2, H/2+34);
-    if(last) ctx.fillText("第三关 · 全线崩塌   ✔", W/2, H/2+64);
+    if(last) ctx.fillText("第三关 · 逃出基地   ✔", W/2, H/2+64);
     ctx.fillStyle="#ffd34d"; ctx.font="bold 22px monospace";
     ctx.fillText("总得分 " + score + " · 总击杀 " + killCount, W/2, H/2+(last?112:92));
     if(Math.floor(perfNow/500)%2===0){

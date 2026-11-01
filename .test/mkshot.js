@@ -177,6 +177,19 @@ window.addEventListener("load", () => {
     } else if (mode === "jump") {
       place(700); cam = 520;
       p.y -= 90; p.onGround = false; p.vy = -2; p.face = 1; p.aimAng = Math.PI/2;
+    } else if (mode === "cover") {
+      // 封面：三关标题
+      state = "title";
+    } else if (mode === "carry") {
+      // 第一关带枪进第二关：HUD 应该直接显示手里的枪和等级
+      player.weapon = "L"; player.wlv.L = 2;
+      nextLevel(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0; bullets.length = 0;
+      cam = 0;
+    } else if (mode === "l3banner") {
+      // 第三关开场标题卡：第 3 关 · 逃出基地
+      startFinalRun(); state = "play"; stateTimer = 0;
+      enemies.length = 0; ebullets.length = 0; bullets.length = 0;
     } else if (mode === "up") {
       place(700); cam = 520;
       p.face = 1; p.aimAng = -Math.PI/2; p.aimLatch = 75;

@@ -647,6 +647,33 @@ for (let i = 0; i < baseGround.length; i++) {
 ok("重开后第一关地形与初始完全一致（没有隐形空洞）", diffN === 0,
    diffN ? diffN + " 处不一致，首个 x=" + firstDiff : "全部一致 " + baseGround.length + " 个采样点");
 
+// ================= 跨关装备保留 + 抬枪松手即复位 =================
+console.log("\n【5f】跨关装备 / 抬枪复位");
+clearKeys();
+D.startGame(); step(2);
+D.state = "play";
+D.p.weapon = "M"; D.p.wlv.M = 2; D.p.wlv.B = 1;
+D.nextLevel(); step(2);
+ok("第一关的枪带进第二关（枪型+等级）", D.p.weapon === "M" && D.p.wlv.M === 2 && D.p.wlv.B === 1,
+   "第二关开局 " + D.p.weapon + " Lv" + (D.p.wlv.M + 1));
+D.startFinalRun(); step(2);
+ok("第二关的枪带进第三关", D.p.weapon === "M" && D.p.wlv.M === 2,
+   "第三关开局 " + D.p.weapon + " Lv" + (D.p.wlv.M + 1));
+D.startGame(); step(2); D.state = "play";
+ok("重开一局回到空手（新游戏不继承）", D.p.weapon === "N" && D.p.wlv.M === 0,
+   "重开 " + D.p.weapon + " Lv" + D.p.wlv.M);
+
+clearKeys();
+step(2);
+key("ArrowUp"); step(2);
+const aimUp = D.p.aimAng;
+key("ArrowUp", false); step(1);
+const aimAfterRelease = D.p.aimAng;
+ok("按住 ↑ 抬枪朝正上方", Math.abs(aimUp + Math.PI / 2) < 0.01, "aimAng=" + aimUp.toFixed(3));
+ok("松开 ↑ 的当帧就恢复平射（无延迟残留）", aimAfterRelease === 0, "aimAng=" + aimAfterRelease);
+key("ArrowUp"); step(2); key("ArrowUp", false); step(8);
+ok("松手 8 帧后仍是平射（不会被旧的余量拉住）", D.p.aimAng === 0, "aimAng=" + D.p.aimAng);
+
 // ================= 渲染不报错 =================
 console.log("\n【6】渲染");
 let renderErr = null;

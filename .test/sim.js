@@ -181,7 +181,7 @@ ok("坦克碾压造成伤害", hit, "lives " + lv0 + " → " + D.lives + " st=" 
 D.enemies.length = 0; D.lives = 5;
 const t2 = D.mkTank(2400); D.enemies.push(t2);
 tp(2900); step(2);
-t2.st = "charge"; t2.stT = 4;
+t2.alerted = true; t2.st = "charge"; t2.stT = 4;   // 已锁定主角（未锁定时只巡场，不冲锋/不倒退）
 const x1 = t2.x;
 step(20);
 ok("冲锋结束后转为后退", t2.st === "retreat" && t2.x < x1 + 4, "st=" + t2.st + " x " + x1.toFixed(0) + " → " + t2.x.toFixed(0));
@@ -200,16 +200,16 @@ const px0 = pp.x;
 step(30);
 ok("车顶随车移动", Math.abs(pp.x - px0) > 20 || pp.x > px0 + 10, "x " + px0.toFixed(0) + " → " + pp.x.toFixed(0));
 
-// 坦克炮不能向上打
+// 坦克炮不能向上打（已锁定目标后才开火）
 D.ebullets.length = 0; D.enemies.length = 0;
 const t4 = D.mkTank(2400); D.enemies.push(t4);
 pp.x = t4.x - 200; pp.y = t4.y - 260; pp.vy = 0; pp.inv = 999; pp.onGround = false;
-t4.cd = 1;
+t4.cd = 1; t4.alerted = true;
 step(3);
 const shotsNow = D.ebullets.slice();
-let steep = shotsNow.filter(s => s.vy / Math.hypot(s.vx, s.vy) < -0.42);
-ok("主炮仰角受限（打不到高空）", t4.gunA > -0.32 && steep.length === 0,
-   "gunA=" + t4.gunA.toFixed(2) + " 仰角过大的弹=" + steep.length);
+let steep = shotsNow.filter(s => Math.abs(s.vy) > 0.01);
+ok("主炮只做水平前射（打不到高空）", t4.gunA > -0.05 && steep.length === 0,
+   "gunA=" + t4.gunA.toFixed(2) + " 有俯仰的弹=" + steep.length);
 
 // ================= 空中前滚翻 =================
 console.log("\n【7】空中前滚翻");
@@ -312,23 +312,50 @@ console.log("\n【11】更多坦克 / 坦克开火");
 const tankCount = D.triggers.filter(t => t.type === "tank" || t.type === "turret").length;
 ok("第二关坦克触发点 ≥ 18", tankCount >= 18, "坦克 " + tankCount + " 辆");
 D.enemies.length = 0; D.ebullets.length = 0;
-const tk = D.mkTank(1200); tk.cd = 6; D.enemies.push(tk);
-q = D.p; q.x = 1010; q.y = D.groundYAt(1021) - q.h; q.vy = 0; q.onGround = true; q.inv = 999;
-D.setCam(800);
-let tkShots = 0, prevEb = 0, tkWarn = false;
-for (let i = 0; i < 60; i++) {
+const tk = D.mkTank(1200); tk.cd = 2; D.enemies.push(tk);
+q = D.p; q.x = 240; q.y = D.groundYAt(251) - q.h; q.vy = 0; q.onGround = true; q.inv = 999;
+D.setCam(0);
+let farShots = 0, prevEb = 0;
+for (let i = 0; i < 150; i++) {
   step(1);
-  if (D.ebullets.length > prevEb) tkShots += D.ebullets.length - prevEb;
+  if (D.ebullets.length > prevEb) farShots += D.ebullets.length - prevEb;
+  prevEb = D.ebullets.length;
+}
+ok("坦克在视野外不开火（不会一开局就射）", farShots === 0 && !tk.alerted,
+   "远处炮弹=" + farShots + " alerted=" + tk.alerted + " dist=" + Math.abs((q.x+q.w/2)-(tk.x+tk.w/2)).toFixed(0));
+
+// 靠近后：先「察觉」再开火，炮弹从炮口水平向前
+D.ebullets.length = 0;
+q.x = 1010; q.y = D.groundYAt(1021) - q.h; q.vy = 0; q.onGround = true; q.inv = 999;
+D.setCam(800);
+let tkShots = 0, tkWarn = false, firstShell = null, alertFrame = -1;
+for (let i = 0; i < 150; i++) {
+  step(1);
+  if (tk.alerted && alertFrame < 0) alertFrame = i;
+  if (D.ebullets.length > prevEb) {
+    tkShots += D.ebullets.length - prevEb;
+    if (!firstShell) firstShell = D.ebullets[D.ebullets.length - 1];
+  }
   prevEb = D.ebullets.length;
   if (tk.aim > 0 || tk.recoil > 0) tkWarn = true;
 }
-ok("坦克会发射炮弹（带炮口预警）", tkShots >= 1, "60 帧内 " + tkShots + " 发");
+ok("坦克发现主角后才开炮", tkShots >= 1 && alertFrame > 20, "察觉帧=" + alertFrame + " 150 帧内 " + tkShots + " 发");
 ok("坦克开火前有瞄准线预警", tkWarn, "aim 线出现过 = " + tkWarn);
+ok("炮弹从炮口水平向前飞（vy=0）", !!firstShell && Math.abs(firstShell.vy) < 0.01 && Math.abs(firstShell.vx) > 5,
+   firstShell ? "vx=" + firstShell.vx.toFixed(2) + " vy=" + firstShell.vy.toFixed(2) : "没打出炮弹");
 
 // ================= 摄像头：单发 + 数量 =================
 console.log("\n【12】摄像头削弱为单发 / 数量增多");
 const camCount = D.triggers.filter(t => t.type === "cam").length;
 ok("摄像头数量 ≥ 20", camCount >= 20, "摄像头 " + camCount + " 台");
+// 开局段（前 1500px）只允许一台摄像头，且不能有两台贴在一起
+const earlyCams = D.triggers.filter(t => t.type === "cam" && t.px < 1500);
+ok("开局只有一台摄像头", earlyCams.length === 1,
+   "前 1500px 摄像头=" + earlyCams.map(t=>t.px).join(",") + " px");
+const camPx = D.triggers.filter(t => t.type === "cam").map(t => t.px).sort((a,b)=>a-b);
+let minGap = 1e9;
+for (let i = 1; i < camPx.length; i++) minGap = Math.min(minGap, camPx[i] - camPx[i-1]);
+ok("摄像头不会并排堵路（间距 ≥ 120px）", minGap >= 120, "最小间距=" + minGap + "px");
 D.enemies.length = 0; D.ebullets.length = 0;
 const camE = D.mkCam(1000, 78); camE.cd = 1; camE.warn = 0;
 D.enemies.push(camE);

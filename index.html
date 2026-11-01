@@ -356,21 +356,19 @@ const L2_CHECKPOINTS = [0, 1500, 2900, 4600, 5900, 7300];
 // 第二关：厂房流水线（无草丛兵/高塔狙击）；坦克成群推进，天花板摄像头单发点射但数量多
 const L2_TRIGGERS = [
   {x:260,  type:"runner"},
-  {x:420,  type:"tank",   px:700},
-  {x:470,  type:"cam",    px:820,  py:78},
-  {x:560,  type:"cam",    px:900,  py:150},
-  {x:700,  type:"sniper", px:1050},
-  {x:760,  type:"tank",   px:1180},
-  {x:820,  type:"roller", px:1250},
-  {x:980,  type:"drone",  px:1400, py:250},
-  {x:1040, type:"cam",    px:1500, py:72},
-  {x:1120, type:"runner"},
-  {x:1200, type:"tank",   px:1700},
-  {x:1240, type:"turret", px:1850, sp:true},
-  {x:1320, type:"cam",    px:1980, py:140},
+  {x:600,  type:"cam",    px:1040, py:104},        // 开局只留一台摄像头（原来两台并排把路口直接堵死）
+  {x:700,  type:"tank",   px:1120},                // 第一辆坦克推远：走到中段被"发现"后才开炮
+  {x:800,  type:"sniper", px:1250},
+  {x:880,  type:"tank",   px:1400},
+  {x:960,  type:"roller", px:1500},
+  {x:1040, type:"drone",  px:1650, py:250},
+  {x:1120, type:"cam",    px:1750, py:72},
+  {x:1180, type:"runner"},
+  {x:1250, type:"tank",   px:1850},
+  {x:1300, type:"turret", px:1990, sp:true},
   {x:1380, type:"bomber"},
-  {x:1440, type:"cam",    px:2050, py:78},
-  {x:1500, type:"tank",   px:2200},
+  {x:1440, type:"cam",    px:2150, py:78},
+  {x:1500, type:"tank",   px:2280},
   {x:1620, type:"sniper", px:2320},
   {x:1750, type:"roller", px:2400},
   {x:1820, type:"cam",    px:2600, py:72},
@@ -380,7 +378,7 @@ const L2_TRIGGERS = [
   {x:2150, type:"tank",   px:2900},
   {x:2200, type:"cam",    px:3050, py:150},
   {x:2300, type:"runner"},
-  {x:2380, type:"cam",    px:3200, py:78},
+  {x:2380, type:"cam",    px:3320, py:78},
   {x:2450, type:"tank",   px:3300},
   {x:2600, type:"sniper", px:3450},
   {x:2660, type:"cam",    px:3600, py:72},
@@ -1386,12 +1384,24 @@ function update(){
         }
       }
     } else if(e.kind==="tank"){
-      // ===== 坦克：向前推进碾压 → 没碾到就倒退 → 循环；炮管抬不高，站车顶即安全 =====
+      // ===== 坦克：向前推进碾压 → 没碾到就倒退 → 循环；主炮只朝正前方平射，站车顶即安全 =====
       e.t++; if(e.flash>0) e.flash--;
       const dxk = (p.x+p.w/2) - (e.x+e.w/2);
       const dist = Math.abs(dxk);
       const dir = dxk > 0 ? 1 : -1;
       e.face = dir;
+      // ---- 发现机制：进正面视野先「察觉·转炮塔」，确认目标后才开火；看不见就绝不射击 ----
+      const dyT = Math.abs(chestY() - (e.y + 16));
+      const inSight = !p.dead && dist < 560 && dyT < 170;
+      if(!e.alerted){
+        if(inSight){
+          e.spot = (e.spot||0) + 1;
+          if(e.spot >= 34){ e.alerted = true; e.spot = 0; e.loseT = 0; e.cd = Math.max(e.cd, 40); }
+        } else e.spot = Math.max(0, (e.spot||0) - 2);
+      } else if(dist > 780 || p.dead){
+        e.loseT = (e.loseT||0) + 1;
+        if(e.loseT > 90){ e.alerted = false; e.loseT = 0; e.cd = 70; }
+      } else e.loseT = 0;
       // 状态机：待机 → 冲锋 → 后退 → 待机
       if(e.stT > 0) e.stT--;
       if(e.stT === 0){
@@ -1403,6 +1413,7 @@ function update(){
       if(e.st === "charge")       mv = dir * 3.1;      // 冲上来试图碾压
       else if(e.st === "retreat") mv = -dir * 1.9;     // 没碾到 → 倒车拉开距离
       else                        mv = dir * 0.55;     // 待机时缓慢找位置
+      if(!e.alerted) mv = dir * 0.35;                  // 没发现主角：只轻轻巡场，不冲锋
       const nx = e.x + mv;
       if(nx < e.home - 340 || nx > e.home + 340) mv = 0;   // 不离开属地
       e.x += mv; e.vx = mv;
@@ -1427,17 +1438,15 @@ function update(){
         const gy = groundYAt(e.x + e.w/2);
         if(gy < Infinity && feetPrevK <= gy + 2 && e.y + e.h >= gy){ e.y = gy - e.h; e.vy = 0; }
       }
-      // 炮击：主炮仰角锁死在 ±0.30rad，打不到头顶的人
+      // 炮击：炮管严格水平（仰角恒为 0），只向车头方向平射，打不到头顶/车顶的人
       e.cd--;
-      let ang = Math.atan2(chestY() - (e.y + 16), (p.x+p.w/2) - (e.x + e.w/2));
-      ang = Math.max(-0.30, Math.min(0.30, ang));
-      e.gunA += (ang - e.gunA) * 0.14;
-      // 开火前的红色瞄准线（最后 26 帧亮起，给玩家闪避提示）
-      e.aim = (e.cd < 26 && e.cd > 0 && dist < 680) ? e.cd : 0;
-      if(!e.dead && e.cd <= 0 && dist < 680){
+      e.gunA += (0 - e.gunA) * 0.18;
+      // 锁定后的开火前提示：炮口前方短虚线（只在已经发现主角时亮）
+      e.aim = (e.alerted && e.cd < 26 && e.cd > 0 && dist < 620) ? e.cd : 0;
+      if(e.alerted && !e.dead && e.cd <= 0 && dist < 620){
         e.cd = 84 + Math.random()*40; e.recoil = 11;
-        const sx = e.x + e.w/2 + e.face*40, sy = e.y + 16;
-        enemyShot(sx, sy, sx + Math.cos(e.gunA)*600, sy + Math.sin(e.gunA)*600, 5.6, 0.05, 210);
+        const sx = e.x + e.w/2 + e.face*78, sy = e.y + 13;   // 炮口位置（与绘制对齐）
+        enemyShot(sx, sy, sx + e.face*600, sy, 6.0, 0, 220);  // 零散布、零俯仰：纯水平前射
         const shell = ebullets[ebullets.length - 1];
         if(shell){ shell.shell = true; shell.r = 5.6; }   // 坦克炮弹：普通红色圆弹
         S.shoot(); shake = Math.max(shake, 5);
@@ -1958,7 +1967,8 @@ function makeTank(px){
   return {kind:"tank", x:px, y:(gy<Infinity?gy:GROUND_Y)-54, w:104, h:54,
           hp:14, maxHp:14, dead:false, vx:0, vy:0, home:px,
           st:"idle", stT:60+Math.random()*40, cd:70+Math.random()*50, face:-1,
-          t:Math.random()*100, tread:0, gunA:0, recoil:0, flash:0, aim:0};
+          t:Math.random()*100, tread:0, gunA:0, recoil:0, flash:0, aim:0,
+          alerted:false, spot:0, loseT:0};
 }
 // 坦克顶面（当作可站立平台）
 function tankTops(){
@@ -2868,8 +2878,10 @@ function drawTank(e, x, y){
   // 舱盖
   ctx.fillStyle="#2f3b2b"; ctx.beginPath(); ctx.ellipse(cx-9, cy-5, 10, 7, 0, 0, 7); ctx.fill();
   ctx.fillStyle="#5c6c4e"; ctx.beginPath(); ctx.ellipse(cx-9, cy-6, 7.5, 5, 0, 0, 7); ctx.fill();
-  // 观察窗（瞄准时红色发亮）
-  ctx.fillStyle = e.cd < 24 ? "#ff3b1f" : "#8b2a12";
+  // 观察窗（锁定目标常亮红；正在察觉时急促闪红；平时暗红）
+  const spotting = !e.alerted && e.spot > 0;
+  ctx.fillStyle = e.alerted ? "#ff2d12"
+                : (spotting && Math.floor(e.t/4)%2 ? "#ff7a3c" : "#8b2a12");
   ctx.fillRect(cx + gd*13 - 2, cy - 5, 5, 3);
   // 车体编号
   ctx.fillStyle="#8d9a7c"; ctx.font="bold 8px monospace";
@@ -2887,6 +2899,15 @@ function drawTank(e, x, y){
     ctx.beginPath(); ctx.arc(mzx, mzy, 16, 0, 7); ctx.fill();
     ctx.globalAlpha=1;
   }
+  // 察觉提示：还没锁定目标时头顶冒出感叹号（告诉玩家"它发现我了/还没发现我"）
+  if(spotting){
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, e.spot/16);
+    ctx.fillStyle = "#ffd34d"; ctx.font = "bold 15px monospace"; ctx.textAlign = "center";
+    ctx.fillText("!", cx, cy - 22 - Math.min(7, e.spot*0.5));
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
   // 开火前的瞄准提示：短虚线（不是光束），远远就能看见"这辆坦克正在瞄我"
   if(e.aim > 0){
     const lx = mzx, ly = mzy;
@@ -2894,10 +2915,10 @@ function drawTank(e, x, y){
     ctx.globalAlpha = 0.20 + 0.34*Math.abs(Math.sin(e.aim*0.22));
     ctx.strokeStyle = "#ff2f14"; ctx.lineWidth = 1.6;
     ctx.setLineDash([7, 7]);
-    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + Math.cos(ga)*180, ly + Math.sin(ga)*180); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + Math.cos(ga)*gd*180, ly + Math.sin(ga)*gd*180); ctx.stroke();
     ctx.setLineDash([]);
     ctx.globalAlpha = 0.55; ctx.fillStyle="#ff5b3d";
-    const tx = lx + Math.cos(ga)*180, ty = ly + Math.sin(ga)*180;
+    const tx = lx + Math.cos(ga)*gd*180, ty = ly + Math.sin(ga)*gd*180;
     ctx.fillRect(tx-3, ty-3, 6, 6);
     ctx.restore();
   }

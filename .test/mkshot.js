@@ -107,10 +107,18 @@ window.addEventListener("load", () => {
       enemies.length = 0; ebullets.length = 0;
       place(2200); cam = 2050;
       p.face = 1; p.aimAng = 0; p.inv = 0;
-      const tk = makeTank(2450); tk.cd = 14; tk.aim = 14; tk.gunA = -0.05;
+      const tk = makeTank(2450); tk.cd = 12; tk.aim = 12; tk.alerted = true; tk.gunA = 0;
       enemies.push(tk);
-      ebullets.push({x:2320, y:groundYAt(2320)-52, w:7, h:7, vx:-5.6, vy:-0.1, life:200, shell:true, r:5.6});
-      ebullets.push({x:2180, y:groundYAt(2180)-58, w:7, h:7, vx:-5.6, vy:-0.1, life:200, shell:true, r:5.6});
+      ebullets.push({x:2360, y:groundYAt(2360)-41, w:7, h:7, vx:-6, vy:0, life:200, shell:true, r:5.6});
+      ebullets.push({x:2210, y:groundYAt(2210)-41, w:7, h:7, vx:-6, vy:0, life:200, shell:true, r:5.6});
+    } else if (mode === "tankspot") {
+      // 坦克「刚发现主角」：感叹号 + 观察窗闪红，还没开炮
+      nextLevel(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      place(2480); cam = 2250;
+      p.face = -1; p.aimAng = 0; p.inv = 0;
+      const tk = makeTank(2700); tk.spot = 22; tk.alerted = false;
+      enemies.push(tk);
     } else if (mode === "turret") {
       place(600); cam = 430;
       enemies.push(makeTurret(760, groundYAt(760)-40, false));

@@ -764,7 +764,7 @@ function updateFortSniper(b, p){
   if(s.warn > 0){
     s.warn--;
     if(s.warn === 0){
-      enemyShot(s.x + s.face*14, s.y - 28, tx, ty, 6.0, 0.05, 200);
+      enemyShot(s.x + s.face*36, s.y - 26, tx, ty, 6.0, 0.05, 200);
       s.flash = 7; s.cd = 105 + Math.random()*55;
       sfx(1300,.07,"square",.045,-420);
     }
@@ -1456,16 +1456,13 @@ function update(){
         // 瞭望台狙击兵（阵亡 5 秒后由增援接替）
         updateFortSniper(b, p);
         if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
-        // 火炮：交替三向扇形散射
+        // 火炮：单发瞄准（散射已移除）
         for(const c of b.cannons){
           if(c.dead) continue;
           c.t++;
           if(c.t % 150 === 0){
             const dx=(p.x+p.w/2)-(c.x), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
-            for(let k=-1;k<=1;k++){
-              const ang = base + k*0.3;
-              ebullets.push({x:c.x, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:220});
-            }
+            ebullets.push({x:c.x, y:c.y+c.h/2, w:8, h:8, vx:Math.cos(base)*5, vy:Math.sin(base)*5, life:220});
             S.shoot();
           }
           if(aabb(hitbox(),c) && p.inv<=0) hurtPlayer();
@@ -3354,7 +3351,7 @@ function drawFortSniper(s, floorY){
   const dir = s.face;
   // ---- 蓄势预警：红色瞄准激光直指主角 ----
   if(!walking && s.warn > 0 && !player.dead){
-    const mx = s.x + dir*13 - cam, my = y - 28;
+    const mx = s.x + dir*36 - cam, my = y - 26 + bob;
     const ex = player.x + player.w/2 - cam, ey = chestY();
     ctx.globalAlpha = .22 + .30*Math.abs(Math.sin(perfNow/70));
     ctx.strokeStyle = "#ff3b1f"; ctx.lineWidth = 1.6;
@@ -3363,7 +3360,7 @@ function drawFortSniper(s, floorY){
     ctx.beginPath(); ctx.arc(ex, ey, 3.4, 0, 7); ctx.fill();
     ctx.globalAlpha = 1;
   }
-  // ---- 身体（朝左/朝右镜像） ----
+  // ---- 身体（沿用旧版高塔狙击兵设计：迷彩作战服 + 钢盔护目镜 + 双手端长枪） ----
   ctx.save(); ctx.translate(x, y + bob); ctx.scale(dir, 1);
   // 腿
   ctx.fillStyle="#2f3a26";
@@ -3372,36 +3369,33 @@ function drawFortSniper(s, floorY){
     ctx.fillRect(-7, -16, 6, 16 + lo*0.5); ctx.fillRect(1, -16, 6, 16 - lo*0.5);
   } else { ctx.fillRect(-7, -16, 6, 16); ctx.fillRect(1, -16, 6, 16); }
   ctx.fillStyle="#191e1c"; ctx.fillRect(-8, -3.4, 8, 3.4); ctx.fillRect(0, -3.4, 8, 3.4);
-  // 躯干：迷彩 + 战术背心 + 弹匣袋
-  ctx.fillStyle="#4a5836"; ctx.fillRect(-8, -30, 16, 16);
-  ctx.fillStyle="#5f7146"; ctx.fillRect(-8, -30, 16, 3);
-  ctx.fillStyle="#33402a"; ctx.fillRect(-6, -26, 12, 9);
+  // 躯干：迷彩作战服 + 战术背心
+  ctx.fillStyle="#55663a"; ctx.fillRect(-8, -30, 16, 16);
+  ctx.fillStyle="#4a5a32"; ctx.fillRect(-8, -30, 16, 3);
+  ctx.fillStyle="#2e3a22"; ctx.fillRect(-6, -26, 12, 9);
   ctx.fillStyle="#222b1c"; ctx.fillRect(-6, -22, 12, 2.4);
-  ctx.fillStyle="#4a5836"; ctx.fillRect(-9, -29, 4, 9);          // 前肩
   // 头 + 护目镜
   ctx.fillStyle="#c9a17a"; ctx.fillRect(-5, -40, 10, 10);
-  ctx.fillStyle="#0f1418"; ctx.fillRect(-2, -36, 5, 2.6);
-  // 钢盔 + 伪装草叶
-  ctx.fillStyle="#3c4a2b"; ctx.beginPath(); ctx.arc(0, -40, 7.6, Math.PI, 0); ctx.fill();
-  ctx.fillRect(-7.6, -41, 15.2, 3);
-  ctx.fillStyle="#2a3420"; ctx.fillRect(-8.4, -38.8, 17, 2.2);
-  ctx.fillStyle="#6d7d4a";
-  for(let k=-6; k<=6; k+=4) ctx.fillRect(k, -46.6, 2.4, 4.2);
-  ctx.restore();
-  // ---- 狙击枪：沿真实瞄准方向旋转（不镜像） ----
-  const shx = s.x - cam + s.face*2, shy = y - 27 + bob;
-  ctx.save(); ctx.translate(shx, shy);
-  ctx.rotate(walking ? -0.55 : s.aim);
-  ctx.fillStyle="#232a2f"; ctx.fillRect(-7, -3.2, 12, 7.4);      // 枪托 / 机匣
-  ctx.fillStyle="#3a444c"; ctx.fillRect(4, -2, 26, 3.6);         // 枪管
-  ctx.fillStyle="#151a1e"; ctx.fillRect(27, -4.2, 6, 8.4);       // 消焰器
-  ctx.fillStyle="#0d1114"; ctx.fillRect(8, -6.6, 13, 3.8);       // 瞄准镜
-  ctx.fillStyle="#6ad0ff"; ctx.fillRect(9, -7.6, 3, 1.8);        // 镜片反光
+  ctx.fillStyle="#8fa08c"; ctx.fillRect(-2, -36, 5, 2.6);
+  // 钢盔（旧版样式）
+  ctx.fillStyle="#3d4a26"; ctx.beginPath(); ctx.arc(0.5, -40, 8, Math.PI, 0); ctx.fill();
+  ctx.fillRect(-8, -41, 17, 3);
+  ctx.fillStyle="#2a3319"; ctx.fillRect(-8.4, -38.2, 17.4, 2);
+  // 双手端着的长枪（固定端枪姿态，指向面朝方向）
+  ctx.fillStyle="#20242a"; ctx.fillRect(2, -26, 30, 3.4);       // 枪身
+  ctx.fillStyle="#3a424b"; ctx.fillRect(2, -26, 30, 1.2);       // 枪身高光
+  ctx.fillStyle="#14171a"; ctx.fillRect(28, -27.4, 7, 2.6);     // 枪口制退器
+  ctx.fillStyle="#2a2f36"; ctx.fillRect(8, -29.4, 9, 3.2);      // 瞄准镜
+  ctx.fillStyle="#6ad0ff"; ctx.globalAlpha=.7; ctx.fillRect(15, -28.8, 2, 2); ctx.globalAlpha=1;
+  // 前手托枪
+  ctx.fillStyle="#55663a"; ctx.fillRect(4, -22.5, 9, 4);
+  ctx.fillStyle="#c9a17a"; ctx.fillRect(10, -23.4, 4.4, 3.6);
+  // 枪口焰
   if(s.flash > 0){
     ctx.globalAlpha = .95;
     ctx.fillStyle="#ffe58a";
-    ctx.beginPath(); ctx.moveTo(32,-6); ctx.lineTo(48,0); ctx.lineTo(32,6); ctx.closePath(); ctx.fill();
-    ctx.fillStyle="#fffbe0"; ctx.beginPath(); ctx.arc(34,0,5,0,7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(35,-30.5); ctx.lineTo(52,-26.3); ctx.lineTo(35,-22); ctx.closePath(); ctx.fill();
+    ctx.fillStyle="#fffbe0"; ctx.beginPath(); ctx.arc(37,-26.3,5,0,7); ctx.fill();
     ctx.globalAlpha = 1;
   }
   ctx.restore();

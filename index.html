@@ -139,8 +139,12 @@ const L1_TERRAIN = [
   {pts:[[13700,435],[14050,405],[14400,380],[14800,430]]},
   {pts:[[14900,430],[15250,410],[15600,440],[16200,460]]},
 ];
+// 第三关：被落石砸穿的地板（必须在地形查询之前声明）
+let holes = [];
 // 查询某 x 处的地面高度（不在任何地块上 = 悬崖，返回 Infinity）
 function groundYAt(x){
+  // 第三关：被落石砸穿的地板 → 这里是空的（裂缝阶段还没塌）
+  for(const hl of holes) if(hl.crackT <= 0 && x > hl.x && x < hl.x + hl.w) return Infinity;
   for(const pc of terrainPieces){
     const pts = pc.pts;
     if(x < pts[0][0] || x > pts[pts.length-1][0]) continue;
@@ -481,11 +485,12 @@ function loadLevel(n){
     medals   = L1_MEDALS.map(o => ({...o, taken:false, bob:0}));
     crates   = buildCrates(L1_CRATES_X);
   } else if(n === 3){
-    // 第三关：沿用厂房结构（反套路重走一遍），但栈桥可以被碎片砸断
+    // 第三关：反向逃生——沿用厂房结构，但断电停产、地板会被碎片砸穿
     LEVEL_W = L2_W; terrainPieces = L2_TERRAIN; checkpoints = L2_CHECKPOINTS;
-    conveyors = L2_CONVEYORS;
+    conveyors = [];                                        // 断电：传送带全停
     platforms = L2_PLATFORMS.map(pl => ({...pl, crackT: 0, dead: false}));
-    triggers = L2_TRIGGERS.filter((t, i) => i % 3 === 0);   // 只剩零星残兵
+    triggers = [];                                         // 一路只剩逃命的兵，不再刷敌人
+    holes = []; fleeSquad = []; liquid = null;
     powerups = L2_POWERUPS.map(o => ({...o, taken:false, bob:0}));
     medals   = L2_MEDALS.map(o => ({...o, taken:false, bob:0}));
     crates   = buildCrates(L2_CRATES_X).concat(buildPackages(L2_PACKAGES_X));
@@ -504,6 +509,9 @@ let ironBalls = [];        // 要塞投出的黑铁巨弹（有重力/反弹/滚
 let redPools = [];         // 反应堆渗出的红色液体（主角碰到即死）
 let debris = [];           // 第三关：天上砸落的工厂碎片
 let debrisT = 0, finalRun = false;
+let liquid = null;         // 第三关：从反应堆一路追出来的红液墙（x 为浪头，右侧全是液体）
+let fleeSquad = [];        // 第三关：跟着一起逃命的士兵
+let runExitX = 0, runStartX = 0;   // 第三关：逃生门位置 / 起跑位置
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
 let autoSpawnT = 0, bannerT = 0;
 
@@ -854,26 +862,29 @@ function updateAftermath(){
   if(pool && pool.x < p.x + p.w + 26 && stateTimer > 160){ startFinalRun(); return; }
   if(stateTimer > 560) startFinalRun();
 }
-// 第三关：全厂开始崩塌（反套路——重走一遍第二关的厂房，但脚下在塌）
+// 第三关：反套路「反向逃生」——反应堆漏液从身后追上来，只能掉头往厂房大门狂跑
 function startFinalRun(){
   bullets=[]; ebullets=[]; enemies=[]; particles=[]; ironBalls=[]; debris=[]; redPools=[];
-  cam=0; checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; shake=0;
+  fleeSquad=[]; holes=[]; usedTriggers=new Set(); autoSpawnT=0; shake=0;
   loadLevel(3);
   makeBoss(2);
   boss.active = false; boss.dead = true; boss.t = 0;
   boss.core.dead = true; boss.core.hp = 0; boss.core.shielded = false;
   for(const c of boss.cannons) c.dead = true;
-  finalRun = true; debrisT = 60;
-  lives = Math.max(lives, 1) + 1;
-  // 残留的红液洼地（碰到就死）
-  redPools = [
-    {x:2360, y:groundYAt(2360)-9,  w:150, h:13, grow:0, maxW:150, t:0},
-    {x:5480, y:groundYAt(5480)-9,  w:180, h:13, grow:0, maxW:180, t:0},
-    {x:7840, y:groundYAt(7840)-9,  w:160, h:13, grow:0, maxW:160, t:0},
-  ];
-  resetPlayer(60);
-  player.inv = 90;
-  state="play"; stateTimer=0; bannerT=170;
+  finalRun = true; debrisT = 130;
+  runExitX = 6240; runStartX = 8840;
+  lives = Math.max(lives, 1) + 1;                     // 逃生段多给一条命
+  const keepW = player.weapon, keepLv = {...player.wlv};
+  resetPlayer(runStartX);
+  player.weapon = keepW; player.wlv = keepLv;         // 逃命路上不掉武器
+  player.face = -1; player.inv = 120;
+  checkpoint = runExitX + 40;
+  cam = Math.max(0, Math.min(runStartX - W*0.55, LEVEL_W - W));
+  // 红液浪头：起点就在主角右后方，一路碾压过来
+  liquid = {x: runStartX + 420, speed: 1.5, t: 0};
+  // 一起逃命的兵：先铺一屏（有前有后），之后还会有人从侧道冲出来汇合
+  for(let i=0;i<11;i++) spawnFlee(runStartX - 30 - Math.random()*740);
+  state="play"; stateTimer=0; bannerT=210;
   BGM.start();
 }
 // 红液：碰到即死（掉一条命，回到检查点）
@@ -892,26 +903,46 @@ function updateRedPools(){
     }
   }
 }
-// 第三关：天上砸落的工厂碎片——砸中栈桥会给 2 秒逃生时间，然后断掉
+// 第三关：天上砸落的工厂碎片——砸中地板会先裂开、约 1.7 秒后塌成洞
 function spawnDebris(){
   const p = player;
-  const cands = platforms.filter(pl => !pl.dead && pl.x + pl.w > p.x - 40 && pl.x < p.x + 980);
+  // 逃命是往左跑：碎片落在"前方"（更小 x）
+  const cands = platforms.filter(pl => !pl.dead && pl.x + pl.w > p.x - 900 && pl.x < p.x - 30);
   let tgt = null;
-  if(cands.length && Math.random() < 0.62) tgt = cands[Math.floor(Math.random()*cands.length)];
+  if(cands.length && Math.random() < 0.28) tgt = cands[Math.floor(Math.random()*cands.length)];
   const x = tgt ? tgt.x + 14 + Math.random()*Math.max(10, tgt.w - 28)
-                : p.x + 120 + Math.random()*680;
-  debris.push({x, y: -80 - Math.random()*80, w: 22 + Math.random()*40, h: 16 + Math.random()*26,
+                : p.x - 110 - Math.random()*620;
+  debris.push({x, y: -80 - Math.random()*90, w: 22 + Math.random()*40, h: 16 + Math.random()*26,
                vy: 2.0 + Math.random()*1.8, vx: 0, rot: Math.random()*6.28,
                spin: (Math.random()-0.5)*0.14, tgt, dead:false, t:0});
   sfx(70,.14,"square",.05,-40);
 }
 function updateFinalRun(p){
-  // 碎片持续掉落
+  // ===== ① 红液浪头：一路从身后碾过来（越拖越急，被甩太远会自己加速）=====
+  const L = liquid;
+  if(L){
+    L.t++;
+    // 追猎节奏：永远保持在身后约 380px 左右——跑快了它加速追，停下了它慢慢逼近
+    const gap = L.x - (p.x + p.w);
+    const base = 1.5 + Math.min(1.25, L.t/700);
+    let spd = Math.max(base, Math.min(4.2, (gap - 320) * 0.05));
+    if(gap > 950) spd = 4.2;                       // 被彻底甩开 → 全力追上来
+    L.x -= spd;
+    if(L.t % 2 === 0){
+      const gyL = groundYAt(L.x + 8);
+      particles.push({x: L.x + Math.random()*30, y: (gyL<Infinity?gyL:440) - 24 - Math.random()*110,
+        vx:-0.6-Math.random()*1.9, vy:-1.1-Math.random()*1.9, life:18,
+        color: Math.random()<.5 ? "#ff2a2a" : "#ff7a6a"});
+    }
+    // 被浪头舔到 → 掉命
+    if(!p.dead && p.x + p.w - 6 > L.x) hurtPlayer(true);
+  }
+  // ===== ② 碎片：砸中主角 / 砸裂地板（约 1.7 秒后塌成洞）=====
   debrisT--;
-  if(debrisT <= 0){
+  if(debrisT <= 0 && state === "play"){
     spawnDebris();
-    debrisT = 34 + Math.random()*40;
-    if(Math.random() < 0.35) debrisT = 16;         // 偶尔连砸
+    debrisT = 44 + Math.random()*46;
+    if(Math.random() < 0.30) debrisT = 20;             // 偶尔连砸
   }
   for(const d of debris){
     d.t++;
@@ -934,15 +965,37 @@ function updateFinalRun(p){
       sfx(110,.36,"square",.13,-40);
       continue;
     }
+    // 砸在跑道上 → 地板裂开，稍后塌出洞
     const gy = groundYAt(d.x + d.w/2);
     if(gy < Infinity && d.y + d.h >= gy){
-      d.dead = true; shake = Math.max(shake, 5);
-      explode(d.x + d.w/2, gy - 4, "#9aa0a8", 14, 3.5);
-      sfx(95,.28,"square",.10,-50);
+      d.dead = true; shake = Math.max(shake, 8);
+      explode(d.x + d.w/2, gy - 4, "#9aa0a8", 16, 3.6);
+      explode(d.x + d.w/2, gy - 4, "#ffb347", 8, 3);
+      sfx(95,.30,"square",.11,-46);
+      const cx = d.x + d.w/2;
+      const nearHole = holes.some(h => Math.abs((h.x + h.w/2) - cx) < 190);
+      if(!nearHole && holes.length < 6 && cx > runExitX - 150 && cx < runStartX + 40){
+        const cw = 64 + Math.random()*24;
+        holes.push({x: cx - cw/2, w: cw, y: gy, crackT: 100, seed: Math.random()*9});
+      }
+      continue;
     }
     if(d.y > H + 140) d.dead = true;
   }
   debris = debris.filter(d => !d.dead);
+  // 地板裂缝倒计时（红裂缝闪烁 → 轰然塌陷）
+  for(const hl of holes){
+    if(hl.crackT <= 0) continue;
+    hl.crackT--;
+    if(hl.crackT === 0){
+      shake = Math.max(shake, 15); sfx(80,.5,"square",.15,-40);
+      for(let k=0;k<16;k++) particles.push({x: hl.x + Math.random()*hl.w, y: hl.y,
+        vx:(Math.random()-0.5)*2.6, vy:-1-Math.random()*2.6, life:22, color:"#8a94a4"});
+    } else if(hl.crackT % 8 === 0){
+      particles.push({x: hl.x + Math.random()*hl.w, y: hl.y - 2,
+        vx:(Math.random()-0.5)*1.4, vy:-0.4, life:14, color:"#ff5b3d"});
+    }
+  }
   // 栈桥断裂倒计时（闪烁 → 轰然塌落）
   for(const pl of platforms){
     if(pl.dead || pl.crackT <= 0) continue;
@@ -957,19 +1010,79 @@ function updateFinalRun(p){
         vx:(Math.random()-0.5)*1.3, vy:-0.3, life:16, color:"#ff5b3d"});
     }
   }
-  // 冲到熔穿的核心破口 → 逃出厂房
-  if(state === "play" && p.x + p.w > boss.core.x - 44){
+  // ===== ③ 一起逃命的人群 =====
+  updateFleeSquad(p);
+  // ===== ④ 冲进左端逃生门 → 逃出厂房 =====
+  if(state === "play" && p.x + p.w/2 < runExitX + 8){
     state = "escape"; stateTimer = 0; shake = 20;
     sfx(65,.9,"sawtooth",.16,-30);
   }
 }
-// 逃出演出：整座工厂在身后垮塌
+// 逃命的兵：一路向左狂奔；被液面追上会卷进去，掉进塌陷的洞会摔下去
+function spawnFlee(x){
+  const gx = Math.max(20, Math.min(LEVEL_W - 60, x));
+  const gy = groundYAt(gx);
+  fleeSquad.push({x:gx, y:(gy<Infinity?gy:GROUND_Y) - 38, w:20, h:38, vy:0,
+    spd: 2.85 + Math.random()*0.55, animT: Math.random()*10,
+    panic: Math.random() < 0.4, dead:false, sinkT:0, onGround:true});
+}
+function updateFleeSquad(p){
+  const L = liquid;
+  for(const s of fleeSquad){
+    if(s.dead){ s.sinkT++; continue; }
+    s.animT += 0.30 + s.spd*0.02;
+    const near = L ? (L.x - s.x) < 240 : false;
+    s.x -= near ? s.spd*1.24 : s.spd;
+    // 竖直：踏空则往下掉（洞/断桥）
+    s.vy = Math.min(s.vy + 0.55, 14);
+    s.y += s.vy;
+    const gy = groundYAt(s.x + s.w/2);
+    if(gy < Infinity && s.y + s.h >= gy && s.vy >= 0 && s.y + s.h < gy + 40){
+      s.y = gy - s.h; s.vy = 0; s.onGround = true;
+    } else s.onGround = false;
+    if(s.y > H + 60){ s.dead = true; s.sinkT = 26; continue; }
+    // 被液面吞掉（身体右侧被浪头淹过）
+    if(L && s.x + s.w > L.x){
+      s.dead = true; s.sinkT = 0;
+      explode(s.x + s.w/2, s.y + s.h*0.5, "#ff2a35", 12, 3.4);
+      if(Math.random() < .45) sfx(320,.14,"square",.05,-160);
+      continue;
+    }
+    if(Math.random() < 0.008) s.panic = !s.panic;
+    if(s.x < cam - 300) s.dead = true;
+  }
+  fleeSquad = fleeSquad.filter(s => !(s.dead && s.sinkT > 26));
+  // 不断有人从侧道冲出来汇合（上限 13 个）
+  if(L && L.t % 150 === 70 && fleeSquad.filter(s => !s.dead).length < 13){
+    spawnFlee(p.x + 90 + Math.random()*320);
+  }
+}
+// 逃命段的重生：放在浪头前方，液面被震退一点，避免刚站起来又被吞
+function respawnInRun(){
+  const p = player;
+  const keepW = p.weapon, keepLv = {...p.wlv};
+  const front = liquid ? liquid.x : p.x + 400;
+  const rx = Math.max(80, front - 430);
+  resetPlayer(rx);
+  player.weapon = keepW; player.wlv = keepLv;
+  player.face = -1; player.inv = 150;
+  if(liquid){ liquid.x = rx + 360; liquid.speed = Math.max(1.5, liquid.speed - 0.35); }
+  cam = Math.max(0, Math.min(rx - W*0.55, LEVEL_W - W));
+  shake = 12;
+}
+// 逃出演出：冲进逃生门，身后整条走廊被红液灌满、工厂垮塌
 function updateEscape(){
   stateTimer++;
   const p = player;
   p.vx = 0; p.vy = 0; p.animT++;
-  shake = Math.max(shake, 6 + Math.min(22, stateTimer*0.10));
-  if(stateTimer % 5 === 0){
+  p.crouch = false; p.rolling = false; p.slideT = 0;
+  shake = Math.max(shake, 5 + Math.min(22, stateTimer*0.12));
+  // 主角继续往门口冲
+  const doorX = runExitX - 34;
+  if(p.x > doorX){ p.x = Math.max(doorX, p.x - 3.4); p.face = -1; }
+  const tCam = Math.max(0, Math.min(p.x - W*0.42, LEVEL_W - W));
+  cam += (tCam - cam) * 0.08;
+  if(stateTimer % 4 === 0){
     debris.push({x: cam + Math.random()*W, y: -60, w: 26+Math.random()*52, h: 18+Math.random()*30,
       vy: 3+Math.random()*3.2, vx:0, rot: Math.random()*6.28,
       spin:(Math.random()-0.5)*0.2, tgt:null, dead:false, t:0});
@@ -979,15 +1092,13 @@ function updateEscape(){
     if(d.y > H + 120) d.dead = true;
   }
   debris = debris.filter(d => !d.dead);
-  if(stateTimer === 120){
-    const gy = groundYAt(boss.core.x + boss.core.w/2);
-    redPools.push({x: boss.core.x + boss.core.w/2, y:(gy<Infinity?gy:GROUND_Y)-10,
-                   w: 40, h: 14, grow: 5, maxW: 1000, t: 0});
+  // 液面把整条走廊灌满
+  if(liquid){
+    liquid.x -= 4.6;
+    if(stateTimer % 3 === 0) particles.push({x: liquid.x + Math.random()*40, y: H - 60 - Math.random()*260,
+      vx:-1-Math.random()*2.4, vy:-1-Math.random()*2, life:18, color:"#ff3a34"});
   }
-  for(const pool of redPools){
-    pool.t++;
-    if(pool.grow > 0 && pool.w < pool.maxW){ pool.x -= pool.grow; pool.w += pool.grow; }
-  }
+  updateFleeSquad(p);
   if(stateTimer > 260){ state = "win"; stateTimer = 0; BGM.stop(); S.clear(); }
 }
 
@@ -1256,7 +1367,9 @@ function update(){
   }
 
   // ----- 相机 -----
-  const targetCam = Math.max(0, Math.min(p.x - W*0.38, LEVEL_W - W));
+  // 第三关是往左跑：镜头多留出前方的空间（主角偏屏幕右侧）
+  const camLead = finalRun ? 0.55 : 0.38;
+  const targetCam = Math.max(0, Math.min(p.x - W*camLead, LEVEL_W - W));
   cam = boss.active ? Math.min(cam+6, LEVEL_W - W) : cam + (targetCam - cam)*0.12;
 
   // ----- 触发生成（通关演出阶段 / Boss 已破不再刷兵）-----
@@ -2125,6 +2238,8 @@ function hurtPlayer(fell){  const p = player;
   lives--; S.hurt(); shake=12;
   explode(p.x+p.w/2, p.y+p.h/2, "#ff5b3d", 18, 5);
   if(lives < 0){ state = "over"; stateTimer=0; BGM.stop(); return; }
+  // 第三关逃命：检查点没有意义，统一重生在液面前方
+  if(finalRun){ respawnInRun(); ebullets = ebullets.filter(b => Math.abs(b.x - p.x) > 150); return; }
   // 找最近的检查点
   let cp = 0;
   for(const c of checkpoints) if(c <= p.x+50) cp = Math.max(cp,c);
@@ -2470,6 +2585,183 @@ function drawRedPools(){
     }
     ctx.globalAlpha = 1;
   }
+}
+// 第三关：被碎片砸裂 / 砸穿的地板
+function drawHoles(){
+  for(const hl of holes){
+    const x = hl.x - cam;
+    if(x + hl.w < -60 || x > W + 60) continue;
+    if(hl.crackT > 0){
+      // 裂缝预警（红色闪烁 + 抖动），还没塌
+      const jit = Math.sin(perfNow/40 + hl.seed)*1.6;
+      ctx.save();
+      ctx.globalAlpha = .30 + .55*Math.abs(Math.sin(perfNow/70 + hl.seed));
+      ctx.strokeStyle = "#ff3b2f"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      for(let i=0;i<5;i++){
+        const sx = x + 6 + i*(hl.w-12)/4;
+        ctx.moveTo(sx + jit, hl.y - 1);
+        ctx.lineTo(sx + Math.sin(i*2.1 + hl.seed)*11 + jit, hl.y + 26 + (i%2)*8);
+      }
+      ctx.moveTo(x + hl.w*0.2 + jit, hl.y + 8); ctx.lineTo(x + hl.w*0.8 + jit, hl.y + 14);
+      ctx.stroke();
+      ctx.globalAlpha = .45; ctx.fillStyle = "#ffb347";
+      ctx.fillRect(x + hl.w/2 - 3 + jit, hl.y - 8, 6, 6);
+      ctx.restore();
+      continue;
+    }
+    // 已塌：黑洞 + 崩塌的断口
+    const g = ctx.createLinearGradient(0, hl.y, 0, hl.y + 150);
+    g.addColorStop(0, "#05070a"); g.addColorStop(.6, "#0b0e13"); g.addColorStop(1, "rgba(8,10,14,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x - 2, hl.y - 1, hl.w + 4, Math.min(H - hl.y + 20, 160));
+    // 断口碎块
+    ctx.fillStyle = "#2b333d";
+    ctx.beginPath();
+    ctx.moveTo(x - 6, hl.y); ctx.lineTo(x + 10, hl.y); ctx.lineTo(x + 4, hl.y + 12); ctx.lineTo(x - 8, hl.y + 7);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + hl.w + 6, hl.y); ctx.lineTo(x + hl.w - 10, hl.y); ctx.lineTo(x + hl.w - 4, hl.y + 13);
+    ctx.lineTo(x + hl.w + 8, hl.y + 6); ctx.closePath(); ctx.fill();
+    // 断口下缘的钢筋
+    ctx.strokeStyle = "#4a5560"; ctx.lineWidth = 1.4;
+    for(let i=0;i<3;i++){
+      const sx = x + 8 + i*(hl.w-16)/2;
+      ctx.beginPath(); ctx.moveTo(sx, hl.y + 2); ctx.lineTo(sx + 2, hl.y + 16 + (i%2)*6); ctx.stroke();
+    }
+  }
+}
+// 第三关：左端的逃生门（绿色 EXIT 灯 + 卷帘门半开）
+function drawExitDoor(){
+  if(!finalRun) return;
+  const x = runExitX - cam;
+  if(x < -160 || x > W + 160) return;
+  const gy = groundYAt(runExitX + 40);
+  const base = gy < Infinity ? gy : 440;
+  const top = base - 138;
+  // 门洞边框
+  ctx.fillStyle = "#232b34"; ctx.fillRect(x - 54, top - 12, 108, 150);
+  ctx.fillStyle = "#141a21"; ctx.fillRect(x - 46, top, 92, 138);
+  // 门后的强光（出口）
+  const g = ctx.createLinearGradient(x, top, x, base);
+  g.addColorStop(0, "#eaffff"); g.addColorStop(.55, "#9fe4ff"); g.addColorStop(1, "#3f8fb5");
+  ctx.fillStyle = g; ctx.fillRect(x - 38, top + 8, 76, 130);
+  // 半开的卷帘门（从上方落下）
+  ctx.fillStyle = "#3a444f";
+  for(let i=0;i<4;i++){
+    ctx.fillRect(x - 40, top + 6 + i*9, 80, 7);
+    ctx.fillStyle = i%2 ? "#48535f" : "#3a444f";
+  }
+  ctx.fillStyle = "#2a333c"; ctx.fillRect(x - 40, top + 6, 80, 4);
+  // EXIT 指示牌
+  ctx.fillStyle = "#0c3320"; ctx.fillRect(x - 40, top - 34, 80, 20);
+  ctx.fillStyle = "#4dff88"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
+  ctx.fillText("EXIT", x, top - 19);
+  // 指向左的箭头 + 闪烁
+  ctx.globalAlpha = .55 + .45*Math.abs(Math.sin(perfNow/220));
+  ctx.fillStyle = "#4dff88";
+  ctx.beginPath(); ctx.moveTo(x - 62, top - 24); ctx.lineTo(x - 48, top - 32); ctx.lineTo(x - 48, top - 16);
+  ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.textAlign = "left";
+}
+// 第三关：追在身后的红液浪头（浪头左侧是空气，右侧全是液体）
+function drawLiquidWall(){
+  if(!liquid) return;
+  const t = perfNow/1000;
+  const ex = liquid.x - cam;
+  if(ex > W + 180) return;
+  const x0 = Math.max(-70, ex);
+  const wave = (yy) =>
+    Math.max(-70, x0 + Math.sin(yy*0.035 + t*2.6)*11 + Math.sin(yy*0.09 - t*3.7)*5 + (yy < 130 ? -7 : 0));
+  // 背后的红光
+  const gl = ctx.createLinearGradient(x0 - 240, 0, x0 + 60, 0);
+  gl.addColorStop(0, "rgba(255,40,30,0)");
+  gl.addColorStop(1, "rgba(255,40,30,.38)");
+  ctx.fillStyle = gl; ctx.fillRect(x0 - 240, 0, Math.max(0, W - x0 + 300), H);
+  // 液墙主体
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#6b0409"); g.addColorStop(.42, "#a5101a");
+  g.addColorStop(.80, "#cf1725"); g.addColorStop(1, "#4e0106");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(x0, H + 12);
+  for(let yy = -12; yy <= H + 12; yy += 14) ctx.lineTo(wave(yy), yy);
+  ctx.lineTo(W + 90, H + 12);
+  ctx.closePath(); ctx.fill();
+  // 浪头亮边
+  ctx.beginPath();
+  for(let yy = -12; yy <= H + 12; yy += 14){
+    if(yy === -12) ctx.moveTo(wave(yy), yy); else ctx.lineTo(wave(yy), yy);
+  }
+  ctx.strokeStyle = "rgba(255,140,120,.85)"; ctx.lineWidth = 5; ctx.stroke();
+  ctx.strokeStyle = "rgba(255,235,225,.55)"; ctx.lineWidth = 1.8; ctx.stroke();
+  // 浪尖卷曲
+  ctx.fillStyle = "rgba(255,90,80,.55)";
+  ctx.beginPath();
+  ctx.ellipse(wave(H*0.22) + 16, H*0.22, 22, 12, 0, 0, 7); ctx.fill();
+  // 内部翻滚的暗纹与气泡
+  ctx.globalAlpha = .16; ctx.fillStyle = "#ff8070";
+  for(let k=0;k<10;k++){
+    const spanX = Math.max(60, W + 240 - x0);
+    const bx = x0 + 30 + ((perfNow/6 + k*137) % spanX);
+    const by = H - 30 - ((perfNow/9 + k*97) % Math.max(60, H - 50));
+    ctx.beginPath(); ctx.arc(bx, by, 5 + (k%3)*4, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+// 第三关：跟着一起逃命的士兵（敌军也扔下枪往回跑）
+function drawFleeSoldier(s){
+  const x = s.x - cam;
+  if(x < -70 || x > W + 70) return;
+  const alpha = s.dead ? Math.max(0, 1 - s.sinkT/26) : 1;
+  if(alpha <= 0) return;
+  const sink = s.dead ? s.sinkT*1.6 : 0;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = "rgba(0,0,0,.3)";
+  ctx.beginPath(); ctx.ellipse(x + s.w/2, s.y + s.h + 1, s.w*0.72, 4, 0, 0, 7); ctx.fill();
+  ctx.translate(x + s.w/2, s.y + s.h + sink);
+  ctx.scale(-1, 1);                                   // 一律朝左跑
+  const sw = Math.sin(s.animT), sw2 = Math.sin(s.animT + Math.PI);
+  // 后腿 / 前腿
+  ctx.save(); ctx.translate(-2, -15); ctx.rotate(sw*0.72);
+  ctx.fillStyle = "#1d3f6e"; ctx.fillRect(-3, 0, 6, 15);
+  ctx.fillStyle = "#14161b"; ctx.fillRect(-4, 12, 9, 4); ctx.restore();
+  ctx.save(); ctx.translate(3, -15); ctx.rotate(sw2*0.82);
+  ctx.fillStyle = "#245089"; ctx.fillRect(-3, 0, 6, 15);
+  ctx.fillStyle = "#14161b"; ctx.fillRect(-4, 12, 9, 4); ctx.restore();
+  // 躯干 / 背心 / 背包
+  ctx.fillStyle = "#55663a"; ctx.fillRect(-7, -31, 14, 18);
+  ctx.fillStyle = "#4a5a32"; ctx.fillRect(-7, -31, 14, 3);
+  ctx.fillStyle = "#2e3a22"; ctx.fillRect(-5, -28, 10, 9);
+  ctx.fillStyle = "#3a4a26"; ctx.fillRect(-9, -30, 4, 9);
+  // 手臂：惊慌时高举双手
+  const arm = (ax, ay, ang) => {
+    ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang);
+    ctx.fillStyle = "#55663a"; ctx.fillRect(-2.5, 0, 5, 12);
+    ctx.fillStyle = "#c9a17a"; ctx.fillRect(-2.5, 11, 5, 4);
+    ctx.restore();
+  };
+  if(s.panic){ arm(4, -29, -2.35 + sw*0.16); arm(-3, -29, 2.5 + sw2*0.16); }
+  else { arm(2, -29, sw2*1.05); arm(-2, -29, sw*1.05); }
+  // 头 + 钢盔
+  ctx.fillStyle = "#c9a17a"; ctx.fillRect(-5, -41, 11, 10);
+  ctx.fillStyle = "#3d4a26";
+  ctx.beginPath(); ctx.arc(0.5, -40, 8, Math.PI, 0); ctx.fill();
+  ctx.fillRect(-7.5, -41, 16, 3);
+  ctx.fillStyle = "#2a3319"; ctx.fillRect(-7.6, -38.6, 16.4, 2);
+  ctx.fillStyle = "#1c1f18"; ctx.fillRect(2, -37, 3.4, 2.2);
+  // 吓出的汗
+  if(!s.dead && s.panic && Math.floor(s.animT*0.9)%11 === 0){
+    ctx.globalAlpha = alpha*0.8; ctx.fillStyle = "#8fd0ff";
+    ctx.beginPath(); ctx.arc(-10, -45, 1.9, 0, 7); ctx.fill(); ctx.globalAlpha = alpha;
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+function drawFleeSquad(){
+  for(const s of fleeSquad) drawFleeSoldier(s);
 }
 // 工厂碎片：翻滚坠落的钢块 + 尘迹
 function drawDebris(){
@@ -4260,11 +4552,14 @@ function drawQuestionMark(){
 }
 function drawAftermathText(){
   if(state !== "aftermath") return;
-  const msg = stateTimer < 84 ? "……不对劲。" : "反应堆底下在渗什么东西？";
+  const pool = redPools[0];
+  const near = pool && pool.x < player.x + player.w + 150;
+  const msg = stateTimer < 84 ? "……好像哪里不对劲。"
+            : (near ? "它冲过来了 —— 回头跑！往大门跑！" : "反应堆底下在渗什么东西？");
   ctx.globalAlpha = Math.min(1, Math.min(stateTimer, 560-stateTimer)/24);
   ctx.textAlign="center";
   ctx.fillStyle="#0a0d12"; ctx.fillRect(W/2-210, H-98, 420, 44);
-  ctx.fillStyle="#ff8b7a"; ctx.font="16px monospace";
+  ctx.fillStyle = near ? "#ff6a52" : "#ff8b7a"; ctx.font="16px monospace";
   ctx.fillText(msg, W/2, H-70);
   ctx.textAlign="left"; ctx.globalAlpha=1;
 }
@@ -4276,7 +4571,7 @@ function drawEscapeFx(){
   ctx.globalAlpha = 1;
   ctx.textAlign="center";
   ctx.fillStyle="#fff"; ctx.font="bold 28px monospace";
-  if(stateTimer < 210) ctx.fillText("工厂要塌了 —— 快跑！", W/2, 132);
+  if(stateTimer < 210) ctx.fillText("冲出去了 —— 整座工厂塌了！", W/2, 132);
   ctx.textAlign="left";
 }
 function drawHUD(){
@@ -4306,9 +4601,21 @@ function drawHUD(){
     ctx.fillStyle="#8b96a3";
     ctx.fillText("N 制式步枪 Lv1", 20, 104);
   }
-  // 进度条
-  ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
-  ctx.fillStyle="#4da6ff"; ctx.fillRect(W/2-150, H-24, 300*Math.min(1,cam/(LEVEL_W-W)), 8);
+  // 进度条（第三关：还差多远到出口 + 身后液面的位置）
+  if(finalRun && liquid){
+    const total = Math.max(1, runStartX - runExitX);
+    const prog = Math.max(0, Math.min(1, (runStartX - player.x)/total));
+    const lq   = Math.max(0, Math.min(1.06, (runStartX - liquid.x)/total));
+    ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
+    ctx.fillStyle="#4dff88"; ctx.fillRect(W/2-150, H-24, 300*prog, 8);
+    ctx.fillStyle="#ff3b2f"; ctx.fillRect(W/2-150 + 300*lq - 2, H-28, 4, 16);
+    ctx.fillStyle="#ffb0a4"; ctx.font="11px monospace"; ctx.textAlign="center";
+    ctx.fillText("出口", W/2-150, H-30);
+    ctx.textAlign="left";
+  } else {
+    ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
+    ctx.fillStyle="#4da6ff"; ctx.fillRect(W/2-150, H-24, 300*Math.min(1,cam/(LEVEL_W-W)), 8);
+  }
 }
 function drawOverlay(title, sub, color){
   ctx.fillStyle="#000c"; ctx.fillRect(0,0,W,H);
@@ -4336,6 +4643,8 @@ function render(){
     return;
   }
   drawTerrain();
+  drawExitDoor();
+  drawHoles();
   drawRedPools();
   drawCrates();
   drawPowerups();
@@ -4344,10 +4653,12 @@ function render(){
   for(const e of enemies) drawSoldier(e);
   drawBoss();
   drawIronBalls();
+  drawFleeSquad();
   if(player.slideT > 0) drawPlayerSlide();
   else if(player.rolling && !player.onGround) drawPlayerRoll();
   else if(player.crouch) drawPlayerCrouch(); else drawPlayer();
   drawQuestionMark();
+  drawLiquidWall();
   drawDebris();
   drawBullets();
   drawParticles();
@@ -4360,7 +4671,7 @@ function render(){
   if(bannerT>0 && state==="play"){
     const a = Math.min(1, Math.min(bannerT, 170-bannerT)/30);
     const bTitle = LEVEL_IDX===3 ? "第 3 关 · 全线崩塌" : "第 2 关 · 基地突入";
-    const bSub   = LEVEL_IDX===3 ? "反应堆漏液 —— 工厂正在塌，往出口跑！" : "潜入敌军基地 —— 摧毁反应堆核心";
+    const bSub   = LEVEL_IDX===3 ? "回头跑！出口在最左边 —— 别让液面追上你" : "潜入敌军基地 —— 摧毁反应堆核心";
     ctx.globalAlpha = Math.max(0, a);
     ctx.textAlign="center";
     ctx.fillStyle="#0a1018"; ctx.fillRect(0, H/2-58, W, 96);

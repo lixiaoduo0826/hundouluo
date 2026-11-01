@@ -65,6 +65,10 @@ globalThis.__D = {
   get liquid(){return liquid}, get fleeSquad(){return fleeSquad}, get holes(){return holes},
   get runExitX(){return runExitX}, get runStartX(){return runStartX},
   respawnInRun, hurtPlayer,
+  startAlienLair, spawnMini, shootBulletOnly,
+  get mini(){return mini}, get miniSpawned(){return miniSpawned},
+  get MINI_ARENA_L(){return MINI_ARENA_L}, get MINI_ARENA_R(){return MINI_ARENA_R},
+  get L4_W(){return L4_W},
   get score(){return score}, set score(v){score=v},
 };
 `;
@@ -336,8 +340,10 @@ for (let i = 0; i < 150; i++) {
   step(1);
   if (tk.alerted && alertFrame < 0) alertFrame = i;
   if (D.ebullets.length > prevEb) {
-    tkShots += D.ebullets.length - prevEb;
-    if (!firstShell) firstShell = D.ebullets[D.ebullets.length - 1];
+    const fresh = D.ebullets.slice(-(D.ebullets.length - prevEb));
+    const shells = fresh.filter(b => b.shell);
+    tkShots += shells.length;
+    if (!firstShell && shells.length) firstShell = shells[0];
   }
   prevEb = D.ebullets.length;
   if (tk.aim > 0 || tk.recoil > 0) tkWarn = true;
@@ -610,7 +616,10 @@ key("ArrowLeft");
 step(20);
 ok("冲进逃生门触发逃出演出", D.state === "escape", "state=" + D.state);
 step(320);
-ok("工厂倒塌后通关", D.state === "win" && D.LEVEL_IDX === 3, "state=" + D.state + " 关卡 " + D.LEVEL_IDX);
+ok("工厂塌陷后进入第四关过场", D.state === "reveal", "state=" + D.state);
+step(340);
+ok("过场结束后进入第四关 · 外星巢穴", D.LEVEL_IDX === 4 && D.state === "play",
+   "关卡 " + D.LEVEL_IDX + " state=" + D.state);
 
 // ================= 关卡切换：第三关残留必须被清干净 =================
 console.log("\n【5e】阵亡重开清场");
@@ -674,6 +683,100 @@ ok("松开 ↑ 的当帧就恢复平射（无延迟残留）", aimAfterRelease =
 key("ArrowUp"); step(2); key("ArrowUp", false); step(8);
 ok("松手 8 帧后仍是平射（不会被旧的余量拉住）", D.p.aimAng === 0, "aimAng=" + D.p.aimAng);
 
+{
+// ================= 第四关：外星巢穴 =================
+console.log("\n【7】第四关 · 外星巢穴");
+clearKeys();
+D.startAlienLair();
+step(3);
+ok("过场后进入第四关", D.LEVEL_IDX === 4 && D.state === "play", "关卡 " + D.LEVEL_IDX + " state=" + D.state);
+let voidN = 0, voidAt = -1;
+for (let x = 0; x < D.L4_W; x += 40) {
+  if (D.groundYAt(x) === Infinity) { voidN++; if (voidAt < 0) voidAt = x; }
+}
+ok("第四关地面连续（没有断崖/空洞）", voidN === 0, voidN ? voidN + " 处悬空，首个 x=" + voidAt : "全长 " + D.L4_W + "px 连续");
+ok("第四关路上有外星守军", D.triggers.some(t => ["claw","spit","eye"].includes(t.type)),
+   "外星兵触发点 " + D.triggers.filter(t => ["claw","spit","eye"].includes(t.type)).length + " 个");
+
+// ---- 小 Boss：孵化厅守卫 ----
+D.p.x = D.MINI_ARENA_L + 80;
+D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
+step(3);
+ok("走进孵化厅触发小 Boss", !!D.mini && D.mini.kind === "mini", D.mini ? "hp=" + D.mini.hp : "没刷出来");
+D.p.x = D.MINI_ARENA_L - 400; step(2);
+ok("小 Boss 存活时被锁在孵化厅（不能跑掉）", D.p.x >= D.MINI_ARENA_L - 2,
+   "p.x=" + D.p.x.toFixed(0) + " 左边界=" + D.MINI_ARENA_L);
+const stSeen = new Set();
+let alienSpawned = false;
+for (let i = 0; i < 600; i++) {
+  step(1); D.p.inv = 99999;
+  if (D.mini && !D.mini.dead) stSeen.add(D.mini.st);
+  if (D.enemies.some(e => e.kind === "alien")) alienSpawned = true;
+}
+const atk = ["wind","charge","spit","summon"].filter(x => stSeen.has(x));
+ok("小 Boss 会蓄力冲撞 / 吐酸 / 召唤", atk.length >= 2, "出现过：" + atk.join("、"));
+ok("小 Boss 会召唤爪兵助战", alienSpawned, "场上有外星兵 = " + alienSpawned);
+
+// 小 Boss 的血量与体型
+ok("小 Boss 是独立血条的大块头", D.mini.maxHp >= 60 && D.mini.w >= 90,
+   "hp=" + D.mini.maxHp + " 尺寸 " + D.mini.w + "x" + D.mini.h);
+const miniLife0 = D.lives;
+D.mini.hp = 0; D.mini.dead = true;
+step(4);
+ok("击败小 Boss 有奖励（加命 + 掉落）", D.lives > miniLife0 || D.mini.rewarded,
+   "命 " + miniLife0 + " → " + D.lives);
+D.p.x = D.MINI_ARENA_R + 260;
+D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true;
+step(3);
+ok("小 Boss 死后解除封锁，可以继续前进", D.p.x > D.MINI_ARENA_R,
+   "p.x=" + D.p.x.toFixed(0) + " 右边界=" + D.MINI_ARENA_R);
+
+// ---- 最终 Boss：外星主脑 ----
+D.p.x = D.boss.wallX - 160;
+D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.inv = 99999;
+step(4);
+ok("走到母舰核心激活外星主脑", D.boss.active && D.boss.kind === "alien", "active=" + D.boss.active);
+let sawWarn = false, sawBeam = false;
+for (let i = 0; i < 420; i++) {
+  step(1); D.p.inv = 99999;
+  for (const c of D.boss.cannons) { if (c.warnT > 0) sawWarn = true; if (c.beamT > 0) sawBeam = true; }
+}
+ok("眼睛先亮红色预警线，再放光束", sawWarn && sawBeam, "预警=" + sawWarn + " 光束=" + sawBeam);
+ok("三只眼没打完时核心带护盾", D.boss.core.shielded === true, "shielded=" + D.boss.core.shielded);
+for (const c of D.boss.cannons) { c.hp = 0; c.dead = true; }
+step(2);
+ok("打掉三只眼后核心破盾", D.boss.core.shielded === false, "shielded=" + D.boss.core.shielded);
+let sawTentacle = false;
+for (let i = 0; i < 320; i++) { step(1); D.p.inv = 99999; if (D.boss.tentacles.length) sawTentacle = true; }
+ok("破盾后会有地面触须攻击（带预警圈）", sawTentacle, "触须出现过 = " + sawTentacle);
+D.boss.core.hp = 0; D.boss.core.dead = true;
+D.killCore();
+ok("击穿主脑核心 → 母舰崩解", D.boss.dead === true, "boss.dead=" + D.boss.dead);
+
+// ================= 碎片击碎 / 炸弹双发 =================
+console.log("\n【8】碎片可击碎 + 炸弹武器同时开枪");
+D.startGame(); D.state = "play"; step(2);
+const pwb = D.p;
+pwb.weapon = "B"; pwb.wlv.B = 0; pwb.fireCd = 0; pwb.bulletCd = 0;
+D.bullets.length = 0; D.debris.length = 0;
+D.crates.length = 0; D.enemies.length = 0;          // 清掉挡在弹道上的木箱/敌人
+D.debris.push({x: pwb.x + 70, y: pwb.y + 2, w: 30, h: 20, vy: 0, vx: 0,
+               rot: 0, spin: 0, tgt: null, dead: false, t: 0, hp: 1, maxHp: 1, flash: 0});
+D.bullets.push({x: pwb.x + 40, y: pwb.y + 10, w: 6, h: 6, vx: 9, vy: 0, life: 70, dmg: 1});
+step(4);
+ok("子弹能打掉头顶掉落的碎片", D.debris.length === 0, "剩 " + D.debris.length + " 块");
+
+D.bullets.length = 0;
+pwb.fireCd = 0; pwb.bulletCd = 0; pwb.face = 1;
+key("Digit1"); step(1); key("Digit1", false);
+const bombs = D.bullets.filter(b => b.bomb).length;
+const shots = D.bullets.filter(b => !b.bomb).length;
+ok("炸弹武器投弹的同时枪口也在射击", bombs >= 1 && shots >= 1,
+   "炸弹 " + bombs + " 颗 / 子弹 " + shots + " 发");
+ok("炸弹武器的子弹有自己的冷却（不会和投弹抢节奏）", pwb.bulletCd > 0 && pwb.fireCd > 0,
+   "bulletCd=" + pwb.bulletCd + " fireCd=" + pwb.fireCd);
+
+}
 // ================= 渲染不报错 =================
 console.log("\n【6】渲染");
 let renderErr = null;

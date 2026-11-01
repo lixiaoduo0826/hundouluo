@@ -177,6 +177,34 @@ window.addEventListener("load", () => {
     } else if (mode === "jump") {
       place(700); cam = 520;
       p.y -= 90; p.onGround = false; p.vy = -2; p.face = 1; p.aimAng = Math.PI/2;
+    } else if (mode === "l4") {
+      startAlienLair(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      place(1200); cam = 900;
+      p.face = 1; p.aimAng = 0; p.inv = 0;
+      enemies.push(makeAlien(1330, groundYAt(1330), "claw"));
+      enemies.push(makeAlien(1120, groundYAt(1120), "spit"));
+      enemies.push(makeAlien(1450, 214, "eye"));
+      powerups.push({type:"B", x:1260, y:318, w:34, h:26, taken:false, bob:0});
+    } else if (mode === "l4mini") {
+      startAlienLair(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      spawnMini();
+      mini.st = "wind"; mini.warnT = 22;
+      place(4880); cam = 4560;
+      p.face = 1; p.aimAng = 0; p.inv = 0;
+    } else if (mode === "l4boss") {
+      startAlienLair(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      boss.active = true; boss.t = 120;
+      boss.cannons[0].warnT = 18; boss.cannons[0].gunA = Math.PI - 0.12;
+      boss.cannons[1].beamT = 12; boss.cannons[1].gunA = Math.PI - 0.03;
+      place(boss.wallX - 430); cam = boss.wallX - 760;
+      p.face = 1; p.aimAng = 0; p.inv = 0;
+      boss.tentacles.push({x: p.x + 120, t: 40, warn: 0, up: 1, hit: false});
+      boss.tentacles.push({x: p.x + 320, t: 14, warn: 22, up: 0, hit: false});
+    } else if (mode === "reveal") {
+      state = "reveal"; stateTimer = 200;
     } else if (mode === "cover") {
       // 封面：三关标题
       state = "title";

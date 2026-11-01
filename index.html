@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑ 抬枪向上（拾取时按住=换枪） &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 栈桥上蹲下+2 = 落到下一层 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑ 抬枪向上（拾取时按住=换枪） &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -329,17 +329,18 @@ const L2_TERRAIN = [
     [8260,440],[9500,440],           // 斜坡↓ I 反应堆大厅
   ]},
 ];
-// 吊装平台：每个区域做成"地面 → 中层 → 高层"三层结构（层高 70~100px，跳一次即可上）
+// 吊装钢栈桥：每个区域一条贯通长桥（离地约 90px，跳一次即可上），
+// 桥面本身就是"上面那条不同的路线"；部分区域再叠一层高架，形成双层空中通道。
 const L2_PLATFORMS = [
-  {x:280,  y:340, w:170, h:16}, {x:360,  y:250, w:110, h:16},   // A 三层
-  {x:1080, y:300, w:190, h:16}, {x:1180, y:220, w:120, h:16},   // B
-  {x:2200, y:250, w:200, h:16}, {x:2300, y:170, w:120, h:16},   // C
-  {x:3200, y:300, w:180, h:16}, {x:3300, y:215, w:120, h:16},   // D
-  {x:4200, y:350, w:200, h:16}, {x:4300, y:265, w:120, h:16},   // E
-  {x:5300, y:300, w:180, h:16}, {x:5400, y:215, w:120, h:16},   // F
-  {x:6300, y:350, w:200, h:16}, {x:6400, y:265, w:120, h:16},   // G
-  {x:7300, y:300, w:190, h:16}, {x:7400, y:215, w:120, h:16},   // H
-  {x:8820, y:330, w:180, h:16},                                  // Boss 前射击台（打上炮舱）
+  {x:120,  y:348, w:660, h:16},                                  // A 入口长廊
+  {x:1000, y:298, w:880, h:16}, {x:1250, y:208, w:450, h:16},    // B 传送带长廊 + 高架段
+  {x:2080, y:248, w:800, h:16},                                  // C 上层车间
+  {x:3080, y:298, w:800, h:16}, {x:3300, y:208, w:420, h:16},    // D 装配线 + 高架段
+  {x:4080, y:348, w:900, h:16},                                  // E 主厅
+  {x:5180, y:298, w:800, h:16}, {x:5400, y:208, w:420, h:16},    // F 逆向传送带 + 高架段
+  {x:6180, y:348, w:800, h:16},                                  // G 仓储区
+  {x:7180, y:298, w:900, h:16}, {x:7400, y:208, w:420, h:16},    // H 出货区 + 高架段
+  {x:8280, y:348, w:900, h:16}, {x:8700, y:248, w:300, h:16},    // I 反应堆大厅 + 高位射击台（打上炮舱）
 ];
 // 传送带（dir=1 顺向右送=加速；dir=-1 逆向=减速；站上去会被带动）
 const L2_CONVEYORS = [
@@ -352,71 +353,101 @@ const L2_CONVEYORS = [
 ];
 const L1_CONVEYORS = [];   // 第一关没有传送带
 const L2_CHECKPOINTS = [0, 1500, 2900, 4600, 5900, 7300];
-// 第二关：厂房流水线（无草丛兵/高塔狙击）；滚轮炮台会主动推进，天花板摄像头负责高位压制
+// 第二关：厂房流水线（无草丛兵/高塔狙击）；坦克成群推进，天花板摄像头单发点射但数量多
 const L2_TRIGGERS = [
   {x:260,  type:"runner"},
-  {x:420,  type:"turret", px:700,  sp:false},
-  {x:560,  type:"cam",    px:900,  py:78},
+  {x:420,  type:"tank",   px:700},
+  {x:470,  type:"cam",    px:820,  py:78},
+  {x:560,  type:"cam",    px:900,  py:150},
   {x:700,  type:"sniper", px:1050},
+  {x:760,  type:"tank",   px:1180},
   {x:820,  type:"roller", px:1250},
   {x:980,  type:"drone",  px:1400, py:250},
+  {x:1040, type:"cam",    px:1500, py:72},
   {x:1120, type:"runner"},
-  {x:1240, type:"turret", px:1700, sp:true},
+  {x:1200, type:"tank",   px:1700},
+  {x:1240, type:"turret", px:1850, sp:true},
+  {x:1320, type:"cam",    px:1980, py:140},
   {x:1380, type:"bomber"},
-  {x:1500, type:"cam",    px:1900, py:72},
-  {x:1620, type:"sniper", px:2150},
-  {x:1750, type:"roller", px:2300},
+  {x:1440, type:"cam",    px:2050, py:78},
+  {x:1500, type:"tank",   px:2200},
+  {x:1620, type:"sniper", px:2320},
+  {x:1750, type:"roller", px:2400},
+  {x:1820, type:"cam",    px:2600, py:72},
   {x:1880, type:"drone",  px:2500, py:230},
+  {x:1960, type:"tank",   px:2750},
   {x:2000, type:"trencher", px:2650},
-  {x:2150, type:"turret", px:2900, sp:false},
+  {x:2150, type:"tank",   px:2900},
+  {x:2200, type:"cam",    px:3050, py:150},
   {x:2300, type:"runner"},
-  {x:2450, type:"cam",    px:3100, py:78},
-  {x:2600, type:"sniper", px:3300},
-  {x:2750, type:"roller", px:3500},
+  {x:2380, type:"cam",    px:3200, py:78},
+  {x:2450, type:"tank",   px:3300},
+  {x:2600, type:"sniper", px:3450},
+  {x:2660, type:"cam",    px:3600, py:72},
+  {x:2750, type:"roller", px:3700},
   {x:2900, type:"bomber"},
+  {x:2960, type:"tank",   px:3900},
   {x:3050, type:"drone",  px:3800, py:240},
-  {x:3200, type:"turret", px:4000, sp:true},
+  {x:3120, type:"cam",    px:4050, py:150},
+  {x:3200, type:"turret", px:4150, sp:true},
   {x:3350, type:"runner"},
-  {x:3500, type:"cam",    px:4300, py:72},
-  {x:3650, type:"sniper", px:4500},
-  {x:3800, type:"roller", px:4700},
-  {x:3950, type:"trencher", px:4850},
+  {x:3400, type:"tank",   px:4400},
+  {x:3500, type:"cam",    px:4500, py:72},
+  {x:3650, type:"sniper", px:4600},
+  {x:3700, type:"cam",    px:4750, py:140},
+  {x:3800, type:"tank",   px:4850},
+  {x:3950, type:"trencher", px:4900},
+  {x:4020, type:"cam",    px:5100, py:78},
   {x:4100, type:"drone",  px:5100, py:230},
+  {x:4200, type:"tank",   px:5350},
   {x:4250, type:"turret", px:5300, sp:false},
   {x:4400, type:"runner"},
+  {x:4460, type:"cam",    px:5500, py:150},
   {x:4550, type:"bomber"},
-  {x:4700, type:"cam",    px:5500, py:78},
-  {x:4850, type:"sniper", px:5750},
-  {x:5000, type:"roller", px:5900},
+  {x:4620, type:"tank",   px:5700},
+  {x:4700, type:"cam",    px:5750, py:78},
+  {x:4850, type:"sniper", px:5850},
+  {x:4920, type:"cam",    px:6000, py:72},
+  {x:5000, type:"tank",   px:6100},
   {x:5150, type:"drone",  px:6200, py:250},
-  {x:5300, type:"turret", px:6400, sp:true},
+  {x:5220, type:"cam",    px:6350, py:140},
+  {x:5300, type:"tank",   px:6500},
   {x:5450, type:"runner"},
+  {x:5520, type:"cam",    px:6650, py:78},
   {x:5600, type:"trencher", px:6700},
   {x:5750, type:"cam",    px:6900, py:72},
-  {x:5900, type:"sniper", px:7100},
-  {x:6050, type:"roller", px:7300},
+  {x:5820, type:"tank",   px:7000},
+  {x:5900, type:"sniper", px:7150},
+  {x:5960, type:"cam",    px:7250, py:150},
+  {x:6050, type:"tank",   px:7400},
   {x:6200, type:"bomber"},
+  {x:6260, type:"cam",    px:7550, py:78},
   {x:6350, type:"drone",  px:7600, py:240},
+  {x:6450, type:"tank",   px:7750},
   {x:6500, type:"turret", px:7800, sp:false},
   {x:6650, type:"runner"},
-  {x:6800, type:"sniper", px:8000},
-  {x:6950, type:"cam",    px:8500, py:78},
+  {x:6720, type:"cam",    px:7950, py:140},
+  {x:6800, type:"tank",   px:8100},
+  {x:6900, type:"sniper", px:8000},
+  {x:6950, type:"cam",    px:8350, py:78},
+  {x:7050, type:"tank",   px:8500},
   {x:7150, type:"roller", px:8600},
+  {x:7300, type:"cam",    px:8650, py:150},
 ];
 const L2_POWERUPS = [
-  {type:"S", x:1250, y:300},
-  {type:"M", x:2450, y:250},
-  {type:"L", x:3500, y:300},
-  {type:"B", x:4700, y:350},
-  {type:"S", x:5900, y:300},
-  {type:"M", x:6700, y:350},
-  {type:"L", x:7850, y:300},
-  {type:"B", x:8700, y:350},
+  {type:"S", x:1250, y:268},
+  {type:"M", x:2450, y:218},
+  {type:"L", x:3500, y:268},
+  {type:"B", x:4700, y:318},
+  {type:"S", x:5900, y:268},
+  {type:"M", x:6700, y:318},
+  {type:"L", x:7850, y:268},
+  {type:"B", x:8700, y:318},
 ];
 const L2_MEDALS = [
-  {x:1150, y:240},
-  {x:5500, y:240},
-  {x:8700, y:240},
+  {x:1150, y:268},
+  {x:5500, y:268},
+  {x:8700, y:318},
 ];
 const L2_CRATES_X = [1350, 2680, 4300, 6080, 7280];
 // 传送带上的快递箱（打碎掉随机道具）
@@ -472,6 +503,7 @@ function resetPlayer(x){
     fireCd:0, weapon:"N", wlv:{S:0,M:0,L:0,B:0}, aimAng:0, aimLatch:0, animT:0, dead:false,
     slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
     rolling:false, rollAng:0, rollDir:1, landT:0,
+    platY:null, dropY:null,          // 脚下栈桥高度 / 正在下穿的桥面高度
   };
 }
 
@@ -495,9 +527,85 @@ function makeBoss(idx){
         {x:wx-44,  y:280, w:44, h:44, hp:12, maxHp:12, dead:false, t:0},   // 上炮舱：需登上射击台平射
         {x:wx-44,  y:384, w:44, h:44, hp:12, maxHp:12, dead:false, t:0},   // 下炮舱：地面平射可打
       ],
+      // 非弹幕特殊攻击：地面电弧 / 激光扫射 / 厂房落锤（三种轮换）
+      specials: [], spT: 0, spIdx: -1,
     };
   }
 }
+// 反应堆特殊攻击：三种"非子弹"手段轮换（地面电弧波 / 激光扫射 / 厂房落锤）
+function updateReactorSpecials(b, p){
+  const core = b.core;
+  if(!b.specials) b.specials = [];
+  b.spT = (b.spT||0) + 1;
+  // 每 250 帧放一次，三种轮换
+  if(!core.dead && b.spT % 250 === 110){
+    b.spIdx = (b.spIdx + 1) % 3;
+    if(b.spIdx === 0){
+      // ① 地面电弧波：从核心脚下贴地窜向主角，只能跳起来躲
+      b.specials.push({type:"arc", x:core.x-40, dir:(p.x+p.w/2 < core.x ? -1 : 1), t:0,
+                       gy:groundYAt(core.x-40)});
+      sfx(260,.4,"sawtooth",.10,-70);
+    } else if(b.spIdx === 1){
+      // ② 激光扫射：从斜上缓缓扫到斜下，需要蹲下或走位
+      b.specials.push({type:"laser", t:0, ang:-0.95, a0:-0.95, a1:0.44, dur:96});
+      sfx(680,.5,"square",.06,-40);
+    } else {
+      // ③ 厂房落锤：锁定主角头顶的液压冲压机砸下
+      const tx = Math.max(core.x-760, Math.min(core.x-40, p.x+p.w/2));
+      b.specials.push({type:"piston", x:tx, t:0, y:-64, vy:0, hit:false, landT:0});
+      sfx(150,.28,"square",.09,-20);
+    }
+  }
+  for(const s of b.specials){
+    s.t++;
+    if(s.type === "arc"){
+      s.x += s.dir * 6.6;
+      const gy = groundYAt(s.x);
+      if(gy === Infinity || s.x < b.wallX-800 || s.x > b.wallX+40){ s.done = true; continue; }
+      s.gy = gy;
+      if(p.inv<=0 && !p.dead && aabb(hitbox(), {x:s.x-15, y:gy-34, w:30, h:34})) hurtPlayer();
+      if(s.t % 3 === 0) particles.push({x:s.x+(Math.random()-0.5)*12, y:gy-6,
+        vx:(Math.random()-0.5)*1.6, vy:-1-Math.random()*1.2, life:13, color:"#ffe58a"});
+    } else if(s.type === "laser"){
+      if(s.t > 26) s.ang += (s.a1 - s.a0) / s.dur;
+      if(s.t > 26 + s.dur + 12){ s.done = true; continue; }
+      if(s.t > 26 && p.inv<=0 && !p.dead){
+        const ox = core.x, oy = core.y + core.h*0.55;
+        for(let d = 26; d < 860; d += 14){
+          const px = ox - Math.cos(s.ang)*d, py = oy + Math.sin(s.ang)*d;
+          if(py > groundYAt(px) - 2) break;
+          if(aabb(hitbox(), {x:px-7, y:py-7, w:14, h:14})){ hurtPlayer(); break; }
+        }
+      }
+      if(s.t % 2 === 0) particles.push({x:core.x-30+(Math.random()-0.5)*24,
+        y:core.y+core.h*0.55+(Math.random()-0.5)*24,
+        vx:-1-Math.random()*2, vy:(Math.random()-0.5)*1.8, life:13, color:"#ff9b4d"});
+    } else if(s.type === "piston"){
+      const gy = groundYAt(s.x);
+      const floor = (gy === Infinity ? 440 : gy) - 54;
+      if(s.t < 40){
+        s.y = -64 + Math.sin(s.t*0.4)*2;                    // 悬停对位（地面有落点预警）
+      } else if(!s.hit){
+        s.vy += 4.4; s.y += s.vy;                            // 自由落体下砸
+        if(p.inv<=0 && !p.dead && aabb(hitbox(), {x:s.x-34, y:s.y, w:68, h:56})) hurtPlayer();
+        if(s.y >= floor){
+          s.y = floor; s.hit = true; s.landT = s.t;
+          shake = Math.max(shake, 14); sfx(90,.45,"square",.16,-40);
+          explode(s.x, floor+54, "#cfc7ad", 22, 5);
+          explode(s.x, floor+54, "#ffb347", 12, 3.5);
+          if(p.inv<=0 && !p.dead && Math.abs((p.x+p.w/2)-s.x) < 62 && p.y+p.h > floor) hurtPlayer();
+        }
+      } else if(s.t - s.landT > 22){
+        s.y -= 9;                                            // 回收
+        if(s.y < -80) s.done = true;
+      }
+      if(s.t % 4 === 0 && s.y > -60) particles.push({x:s.x+(Math.random()-0.5)*50,
+        y:s.y+56, vx:(Math.random()-0.5)*1.4, vy:-Math.random(), life:12, color:"#9aa0a8"});
+    }
+  }
+  b.specials = b.specials.filter(s => !s.done);
+}
+
 function startGame(){
   bullets=[]; ebullets=[]; enemies=[]; particles=[];
   cam=0; lives=3; score=0; killCount=0;
@@ -620,10 +728,17 @@ function update(){
   }
   p.prevL = kLeft(); p.prevR = kRight();
   // 跳跃（恢复原版手感：跳得高、滞空长）
-  if(kJumpDown() && p.onGround && p.slideT<=0){
+  // 站在钢栈桥上蹲下（↓）再按 2 → 不是起跳，而是从这一层桥面下穿，落到下一行（下层桥 / 地面）
+  if(kJumpDown() && p.onGround && p.slideT<=0 && p.crouch && p.platY !== null){
+    p.dropY = p.platY; p.platY = null;
+    p.y += 5; p.vy = 2.6; p.onGround = false; p.rolling = false; p.rollAng = 0;
+    S.jump();
+    for(let i=0;i<7;i++) particles.push({x:p.x+p.w/2+(Math.random()-0.5)*16, y:p.y+p.h-2,
+      vx:(Math.random()-0.5)*1.6, vy:-Math.random()*1.2, life:14, color:"#8b93a0"});
+  } else if(kJumpDown() && p.onGround && p.slideT<=0){
     p.vy=-12.6; p.onGround=false; S.jump();
     // 起跳瞬间进入空中前滚翻（落地转回站立）
-    p.rolling = true; p.rollDir = p.face; p.rollAng = 0;
+    p.rolling = true; p.rollDir = p.face; p.rollAng = 0; p.platY = null;
   }
   p.vy += 0.55; if(p.vy>14)p.vy=14;
   // 传送带：站在带上顺向加速 / 逆向减速（不按键也会被带着走）
@@ -665,9 +780,14 @@ function update(){
   if(p.vy >= 0){
     for(const pl of platforms.concat(crates, tankTops())){
       if(pl.dead) continue;
+      // 下穿中：忽略刚刚离开的那一层桥面，避免立刻又被它接住
+      if(p.dropY !== null && Math.abs(pl.y - p.dropY) < 5) continue;
       if(footR > pl.x && footL < pl.x + pl.w &&
          feetPrev <= pl.y + 2 && p.y + p.h >= pl.y){
-        p.y = pl.y - p.h; p.vy = 0; landed = true; break;
+        p.y = pl.y - p.h; p.vy = 0; landed = true;
+        p.platY = platforms.indexOf(pl) >= 0 ? pl.y : null;   // 站在栈桥上（可蹲下下穿）
+        p.dropY = null;
+        break;
       }
     }
     if(!landed){
@@ -677,6 +797,7 @@ function update(){
         if((feetPrev <= gy + 2 && feet >= gy) ||
            (p.onGround && feet >= gy - 1 && feet <= gy + 14)){ // 贴地走坡
           p.y = gy - p.h; p.vy = 0; landed = true;
+          p.platY = null; p.dropY = null;
         }
       }
     }
@@ -690,7 +811,8 @@ function update(){
       const v = Math.max(-12.6, Math.min(12.6, p.vy));
       p.rollAng = ((v + 12.6) / 25.2) * Math.PI * 2 * p.rollDir;
     } else {
-      p.rolling = false; p.rollAng = 0; p.landT = 7;   // 落地卸力
+      // 落地：若滞空较短（跳到高台）没转满，落地瞬间补完剩余角度，避免回正跳变
+      p.rolling = false; p.rollAng = Math.PI*2*p.rollDir; p.landT = 7;
       for(let i=0;i<4;i++) particles.push({x:p.x+p.w/2+(Math.random()-0.5)*14, y:p.y+p.h-2,
         vx:(Math.random()-0.5)*1.8, vy:-Math.random()*1.1, life:13, color:"#cfc7ad"});
     }
@@ -799,6 +921,7 @@ function update(){
           enemies.push(makeTurret(t.px, gy<Infinity ? gy-40 : 300, t.sp));
         }
       }
+      if(t.type==="tank") enemies.push(makeTank(t.px));
       if(t.type==="trencher" || t.type==="towerSniper" || t.type==="camper"){
         enemies.push(makeFort(t.px, t.type==="towerSniper" ? "tower" : t.type));
       }
@@ -943,30 +1066,37 @@ function update(){
       let ang = Math.atan2(chestY() - (e.y + 16), (p.x+p.w/2) - (e.x + e.w/2));
       ang = Math.max(-0.30, Math.min(0.30, ang));
       e.gunA += (ang - e.gunA) * 0.14;
+      // 开火前的红色瞄准线（最后 26 帧亮起，给玩家闪避提示）
+      e.aim = (e.cd < 26 && e.cd > 0 && dist < 680) ? e.cd : 0;
       if(!e.dead && e.cd <= 0 && dist < 680){
-        e.cd = 120 + Math.random()*50; e.recoil = 9;
-        const sx = e.x + e.w/2 + e.face*34, sy = e.y + 16;
-        enemyShot(sx, sy, sx + Math.cos(e.gunA)*600, sy + Math.sin(e.gunA)*600, 5.4, 0.05, 210);
-        S.shoot(); shake = Math.max(shake, 4);
+        e.cd = 84 + Math.random()*40; e.recoil = 11;
+        const sx = e.x + e.w/2 + e.face*40, sy = e.y + 16;
+        enemyShot(sx, sy, sx + Math.cos(e.gunA)*600, sy + Math.sin(e.gunA)*600, 5.6, 0.05, 210);
+        S.shoot(); shake = Math.max(shake, 5);
+        // 炮口烟 + 车体震动
+        for(let k=0;k<7;k++) particles.push({x:sx + e.face*10, y:sy, vx:e.face*(1.5+Math.random()*2.2),
+          vy:-Math.random()*1.2, life:16+Math.random()*8, color:"#ffe58a"});
+        for(let k=0;k<4;k++) particles.push({x:sx, y:sy, vx:e.face*(0.4+Math.random()),
+          vy:-Math.random()*1.6, life:22+Math.random()*10, color:"#9aa0a8"});
       }
       if(e.recoil > 0) e.recoil--;
     } else if(e.kind==="cam"){
-      // 天花板摄像头：扫描到主角 → 红灯预警 → 连点射
+      // 天花板摄像头：扫描到主角 → 红灯预警 → 只打一发（数量多，靠密度施压）
       e.t = (e.t||0) + 1; e.animT += 0.35;
       e.y = e.baseY + Math.sin(e.t*0.05)*2;
       const dxc = (p.x+p.w/2) - (e.x+e.w/2);
       e.cd--;
       if(e.warn > 0){
         e.warn--;
-        if(e.warn === 0){ e.burst = 3; e.bt = 0; }
+        if(e.warn === 0){ e.burst = 1; e.bt = 0; }
       } else if(!e.dead && e.cd<=0 && Math.abs(dxc)<640){
-        e.cd = 200 + Math.random()*40;
-        e.warn = 40;
+        e.cd = 150 + Math.random()*45;
+        e.warn = 26;
       }
       if(e.burst>0){
         e.bt++;
         if(e.bt%9===1){
-          enemyShot(e.x+e.w/2, e.y+e.h, p.x+p.w/2, chestY(), 4.6, 0.15, 180);
+          enemyShot(e.x+e.w/2, e.y+e.h, p.x+p.w/2, chestY(), 4.2, 0.14, 190);
           sfx(880,.06,"square",.04,-200); e.burst--;
         }
       }
@@ -1113,11 +1243,11 @@ function update(){
       if(b.kind === "reactor"){
         // 第二关：反应堆核心（上下两座旋转炮舱 + 护盾核心）
         b.core.shielded = b.cannons.some(c => !c.dead);
-        if(b.t % 170 === 0) spawnRunner(true);
+        if(b.t % 260 === 0) spawnRunner(true);
         for(const c of b.cannons){
           if(c.dead) continue;
           c.t++;
-          if(c.t % 120 === 0){                       // 旋转八向弹幕
+          if(c.t % 160 === 0){                       // 旋转八向弹幕
             for(let k=0;k<8;k++){
               const ang = b.t*0.045 + k*Math.PI/4;
               ebullets.push({x:c.x+c.w/2, y:c.y+c.h/2, w:9, h:9, r:5,
@@ -1125,7 +1255,7 @@ function update(){
             }
             S.shoot();
           }
-          if(c.t % 120 === 60){                      // 三连瞄准（带 0.18 弧度微散）
+          if(c.t % 160 === 80){                      // 三连瞄准（带 0.18 弧度微散）
             const dx=(p.x+p.w/2)-(c.x+c.w/2), dy=chestY()-(c.y+c.h/2), base=Math.atan2(dy,dx);
             for(let k=-1;k<=1;k++){
               const ang = base + k*0.18;
@@ -1137,7 +1267,7 @@ function update(){
         }
         const core = b.core;
         if(!core.dead){
-          if(b.t % 210 === 40){                      // 环形弹幕（护盾期节奏更快）
+          if(b.t % 300 === 40){                      // 环形弹幕（护盾期节奏更快）
             const n = core.shielded ? 8 : 12;
             for(let k=0;k<n;k++){
               const ang = b.t*0.06 + k*Math.PI*2/n;
@@ -1148,6 +1278,8 @@ function update(){
           }
           if(aabb(hitbox(), core) && p.inv<=0) hurtPlayer();
         }
+        // 三种非弹幕攻击（电弧 / 激光 / 落锤）
+        updateReactorSpecials(b, p);
       } else {
         if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
         // 火炮：交替三向扇形散射
@@ -1384,9 +1516,9 @@ function makeCam(px, py){
 function makeTank(px){
   const gy = groundYAt(px);
   return {kind:"tank", x:px, y:(gy<Infinity?gy:GROUND_Y)-54, w:104, h:54,
-          hp:16, maxHp:16, dead:false, vx:0, vy:0, home:px,
-          st:"idle", stT:80, cd:90+Math.random()*60, face:-1,
-          t:Math.random()*100, tread:0, gunA:0, recoil:0, flash:0};
+          hp:14, maxHp:14, dead:false, vx:0, vy:0, home:px,
+          st:"idle", stT:60+Math.random()*40, cd:70+Math.random()*50, face:-1,
+          t:Math.random()*100, tread:0, gunA:0, recoil:0, flash:0, aim:0};
 }
 // 坦克顶面（当作可站立平台）
 function tankTops(){
@@ -2203,11 +2335,30 @@ function drawTank(e, x, y){
   // 车体编号
   ctx.fillStyle="#8d9a7c"; ctx.font="bold 8px monospace";
   ctx.fillText("T-72", x+14, y+27);
-  // 炮口焰
-  if(e.recoil > 6){
+  // 炮口焰（开火瞬间：白芯 + 黄色外焰 + 前向光锥）
+  const mzx = cx + gd*Math.cos(ga)*76, mzy = cy - 1 + Math.sin(ga)*76;
+  if(e.recoil > 5){
+    ctx.save(); ctx.translate(mzx, mzy); ctx.rotate(Math.atan2(Math.sin(ga)*gd, Math.cos(ga)*gd));
     ctx.globalAlpha=.85; ctx.fillStyle="#ffe58a";
-    ctx.beginPath(); ctx.arc(cx + gd*70, cy - 1 + Math.sin(ga)*40, 8, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(0,-9); ctx.lineTo(26,0); ctx.lineTo(0,9); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=1; ctx.fillStyle="#fffbe0";
+    ctx.beginPath(); ctx.arc(2,0,6.5,0,7); ctx.fill();
+    ctx.restore();
+    ctx.globalAlpha=.28; ctx.fillStyle="#ffb347";
+    ctx.beginPath(); ctx.arc(mzx, mzy, 16, 0, 7); ctx.fill();
     ctx.globalAlpha=1;
+  }
+  // 开火前的红色瞄准线：远远就能看见"这辆坦克正在瞄我"
+  if(e.aim > 0){
+    const lx = mzx, ly = mzy;
+    ctx.save();
+    ctx.globalAlpha = 0.18 + 0.34*Math.abs(Math.sin(e.aim*0.22));
+    ctx.strokeStyle = "#ff2f14"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + Math.cos(ga)*430, ly + Math.sin(ga)*430); ctx.stroke();
+    ctx.globalAlpha = 0.55; ctx.fillStyle="#ff5b3d";
+    const tx = lx + Math.cos(ga)*430, ty = ly + Math.sin(ga)*430;
+    ctx.fillRect(tx-3, ty-3, 6, 6);
+    ctx.restore();
   }
   // 排气烟
   if(e.vx){
@@ -2861,6 +3012,85 @@ function drawReactor(){
       }
       ctx.globalAlpha=1;
       ctx.fillStyle="#ff7a3d"; ctx.beginPath(); ctx.arc(gx-4, gy+4, 2, 0, 7); ctx.fill();
+    }
+  }
+
+  // ================= 特殊攻击：地面电弧波 / 激光扫射 / 厂房落锤 =================
+  for(const s of (b.specials || [])){
+    if(s.type === "arc"){
+      const ax = s.x - cam, ay = s.gy;
+      // 地面灼烧光环 + 裂地辉光
+      ctx.globalAlpha = .5; ctx.fillStyle = "#ffd76b";
+      ctx.beginPath(); ctx.ellipse(ax, ay-2, 30, 9, 0, 0, 7); ctx.fill();
+      ctx.globalAlpha = .25; ctx.fillStyle = "#ff9b3d";
+      ctx.beginPath(); ctx.ellipse(ax, ay-3, 52, 16, 0, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+      // 电弧主体：外橙光 + 内白芯（两遍描边，高度加大更醒目）
+      for(const pass of [0,1]){
+        ctx.strokeStyle = pass ? "#fffbe0" : "#ffb347";
+        ctx.lineWidth = pass ? 4 : 11;
+        ctx.globalAlpha = pass ? 1 : .4;
+        ctx.beginPath(); ctx.moveTo(ax, ay);
+        for(let k=1;k<=5;k++){
+          const yy = ay - k*9.4, xx = ax + Math.sin(s.t*0.7 + k*2.3)*10;
+          ctx.lineTo(xx, yy);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      // 弧顶电球
+      ctx.fillStyle = "#fff3a0";
+      ctx.beginPath();
+      ctx.arc(ax + Math.sin(s.t*0.7+11)*8, ay-48, 6.5 + Math.sin(s.t)*2, 0, 7);
+      ctx.fill();
+    } else if(s.type === "laser"){
+      const ox = core.x - cam, oy = core.y + core.h*0.55;
+      ctx.save(); ctx.translate(ox, oy); ctx.rotate(-s.ang);
+      if(s.t <= 26){
+        // 蓄力：细红线 + 聚能球（给玩家反应时间）
+        ctx.globalAlpha = .30 + .30*Math.abs(Math.sin(s.t*0.5));
+        ctx.strokeStyle = "#ff5b3d"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-920,0); ctx.stroke();
+        ctx.globalAlpha = .85; ctx.fillStyle = "#fffbe0";
+        ctx.beginPath(); ctx.arc(0, 0, 4 + s.t*0.34, 0, 7); ctx.fill();
+      } else {
+        const fade = Math.min(1, (26 + s.dur + 12 - s.t) / 12);
+        ctx.globalAlpha = .26*fade; ctx.fillStyle = "#ff2d1a"; ctx.fillRect(-920, -24, 920, 48);
+        ctx.globalAlpha = .72*fade; ctx.fillStyle = "#ff7a4d"; ctx.fillRect(-920, -12, 920, 24);
+        ctx.globalAlpha = fade;     ctx.fillStyle = "#fffbe0"; ctx.fillRect(-920, -5, 920, 10);
+        ctx.globalAlpha = .75*fade; ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.arc(-920, 0, 15, 0, 7); ctx.fill();
+      }
+      ctx.restore(); ctx.globalAlpha = 1;
+    } else if(s.type === "piston"){
+      const px = s.x - cam, py = s.y;
+      // 顶部导轨横梁
+      ctx.fillStyle="#242c34"; ctx.fillRect(px-52, 0, 104, 15);
+      ctx.fillStyle="#3c4752"; ctx.fillRect(px-52, 11, 104, 4);
+      // 双液压杆
+      const rodH = Math.max(0, py - 14);
+      ctx.fillStyle="#4c5764"; ctx.fillRect(px-21, 14, 13, rodH); ctx.fillRect(px+8, 14, 13, rodH);
+      ctx.fillStyle="#6f7d8c"; ctx.fillRect(px-19, 14, 4, rodH);  ctx.fillRect(px+10, 14, 4, rodH);
+      // 锤头本体
+      ctx.fillStyle="#2b333c"; ctx.fillRect(px-38, py, 76, 48);
+      ctx.fillStyle="#414d59"; ctx.fillRect(px-34, py+4, 68, 11);
+      ctx.fillStyle="#1b2128"; ctx.fillRect(px-38, py+41, 76, 7);
+      ctx.fillStyle="#697585";
+      for(let k=-28;k<=28;k+=14) ctx.fillRect(px+k, py+17, 3, 3);
+      // 底面黄黑警示条
+      ctx.fillStyle="#d8b23c"; ctx.fillRect(px-36, py+34, 72, 7);
+      ctx.fillStyle="#1d2126";
+      for(let k=-36;k<36;k+=12) ctx.fillRect(px+k, py+34, 5, 7);
+      // 未落地：地面落点预警
+      if(!s.hit){
+        const gy2 = groundYAt(s.x);
+        const fy = (gy2 === Infinity ? 440 : gy2);
+        const blink = Math.floor(perfNow/110) % 2 === 0;
+        ctx.globalAlpha = .30 + .30*Math.min(1, s.t/40);
+        ctx.fillStyle = blink ? "#ff3b1f" : "#8a1c0c";
+        ctx.beginPath(); ctx.ellipse(px, fy-4, 46, 12, 0, 0, 7); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
     }
   }
 

@@ -493,6 +493,7 @@ function loadLevel(n){
 
 // ---------- 实体 ----------
 let player, bullets, ebullets, enemies, particles, cam, boss;
+let ironBalls = [];        // 要塞投出的黑铁巨弹（有重力/反弹/滚动的物理体）
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
 let autoSpawnT = 0, bannerT = 0;
 
@@ -517,6 +518,15 @@ function makeBoss(idx){
         {x:15640, y:GROUND_Y-210, w:40, h:32, hp:8, maxHp:8, dead:false, t:60},
         {x:15640, y:GROUND_Y-60,  w:40, h:32, hp:8, maxHp:8, dead:false, t:150},
       ],
+      // 黑铁巨弹：首发就是这个大家伙（每 330 帧再补一颗）
+      ballT: 0,
+      // 要塞瞭望台上的狙击兵（被打死后 5 秒会有增援走上来接替）
+      sniper:{
+        x: 15590, homeX: 15590, y: 150, w: 22, h: 40,
+        hp: 3, maxHp: 3, dead: false, st: "idle",
+        cd: 120, warn: 0, flash: 0, aim: Math.PI*0.75, face: -1,
+        animT: 0, respawnT: 0, downT: 0,
+      },
     };
   } else {
     const wx = L2_W - 240;                            // 9160
@@ -606,8 +616,167 @@ function updateReactorSpecials(b, p){
   b.specials = b.specials.filter(s => !s.done);
 }
 
+// ============================================================
+//  要塞：黑铁巨弹（首发）—— 有重力、会被地面接住然后向前滚
+// ============================================================
+function spawnIronBall(b){
+  const core = b.core;
+  ironBalls.push({
+    x: core.x + core.w/2, y: core.y + core.h*0.34,
+    r: 22, vx: -8.0, vy: -4.8,
+    hp: 5, maxHp: 5, rolling: false, spin: 0, flash: 0, t: 0, dead: false,
+  });
+  sfx(90,.4,"square",.10,-55);
+  shake = Math.max(shake, 5);
+  explode(core.x+core.w/2, core.y+core.h*0.34, "#ffb347", 10, 3);
+}
+// 黑铁弹被击碎 / 撞到主角：都是炸开；撞到主角时像自爆兵一样向四周喷 6 颗子弹
+function blastIronBall(ball, hitPlayer){
+  if(ball.dead) return;
+  ball.dead = true;
+  const cx = ball.x, cy = ball.y;
+  explode(cx, cy, "#ff5b3d", 24, 6);
+  explode(cx, cy, "#3a3a44", 16, 4.5);
+  sfx(105,.45,"sawtooth",.13,-70);
+  shake = Math.max(shake, 9);
+  if(hitPlayer){
+    // 先结算受伤（hurtPlayer 会清掉主角身边的旧弹幕），再喷弹片，保证 6 颗一定飞出去
+    if(player.inv<=0 && !player.dead) hurtPlayer();
+    // 与自爆兵同款：向四周均匀喷 6 颗弹片
+    for(let k=0;k<6;k++){
+      const a = k*Math.PI/3 + Math.PI/6;
+      ebullets.push({x:cx, y:cy, w:10, h:10, r:5,
+                     vx:Math.cos(a)*4.0, vy:Math.sin(a)*4.0, life:190});
+    }
+  } else {
+    score += 600;
+  }
+}
+function updateIronBalls(){
+  const p = player;
+  for(const ball of ironBalls){
+    if(ball.dead) continue;
+    ball.t++;
+    if(ball.flash > 0) ball.flash--;
+    // ---- 物理：重力 + 抛物线 ----
+    ball.vy += 0.46;
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    ball.spin += ball.vx / ball.r;
+    const gy = groundYAt(ball.x);
+    if(gy < Infinity && ball.y + ball.r >= gy){
+      ball.y = gy - ball.r;
+      if(!ball.rolling){
+        if(Math.abs(ball.vy) > 3.4){
+          // 落地反弹（带衰减），弹两下才进入滚动
+          ball.vy = -Math.abs(ball.vy) * 0.36;
+          ball.vx *= 0.94;
+          for(let k=0;k<4;k++) particles.push({x:ball.x+(Math.random()-0.5)*20, y:gy-3,
+            vx:(Math.random()-0.5)*2.2, vy:-Math.random()*1.4, life:14, color:"#cfc7ad"});
+          shake = Math.max(shake, 3);
+        } else {
+          // 转为贴地滚动，并保留向前冲劲
+          ball.rolling = true; ball.vy = 0;
+          ball.vx = (ball.vx < 0 ? -1 : 1) * Math.max(4.6, Math.abs(ball.vx) * 0.85);
+          sfx(140,.18,"square",.06,-40);
+        }
+      } else {
+        ball.vy = 0;
+        const dir = ball.vx < 0 ? -1 : 1;
+        ball.vx = dir * Math.max(3.0, Math.abs(ball.vx) * 0.997);   // 缓缓减速但一直向前滚
+      }
+    } else if(ball.rolling && gy === Infinity){
+      ball.rolling = false;                 // 滚出平台边缘 → 重新受重力
+    }
+    // 滚动扬尘
+    if(ball.rolling && ball.t % 3 === 0){
+      particles.push({x:ball.x + (ball.vx>0?-ball.r:ball.r)*0.8, y:ball.y + ball.r - 4,
+        vx:(ball.vx>0?-1:1)*(0.4+Math.random()*0.8), vy:-Math.random()*0.9,
+        life:12, color:"#9d9885"});
+    }
+    const hit = {x:ball.x-ball.r, y:ball.y-ball.r, w:ball.r*2, h:ball.r*2};
+    // 碾碎挡路木箱
+    for(const c of crates){
+      if(c.dead || !aabb(hit,c)) continue;
+      c.hp -= 4; c.flash = 6;
+      explode(c.x+c.w/2, c.y+c.h/2, "#c9a17a", 8, 3);
+      if(c.hp <= 0){ c.dead = true; score += 50; }
+    }
+    // 撞到主角 → 炸开 + 6 颗弹片
+    if(!p.dead && p.inv<=0 && aabb(hitbox(), hit)){ blastIronBall(ball, true); continue; }
+    // 出界清理
+    if(ball.x < cam - 200 || ball.x > cam + W + 260 || ball.y > H + 160) ball.dead = true;
+  }
+  ironBalls = ironBalls.filter(b => !b.dead);
+}
+
+// ============================================================
+//  要塞瞭望台的狙击兵（死后 5 秒增援走上来接替）
+// ============================================================
+function sniperBox(){
+  const s = boss && boss.sniper;
+  if(!s || s.dead || s.st === "down") return null;
+  return {x:s.x-11, y:s.y-40, w:22, h:40};
+}
+function damageSniper(d){
+  const s = boss && boss.sniper;
+  if(!s || s.dead || s.st === "down") return;
+  s.hp -= d; s.flash = 6;
+  explode(s.x, s.y-24, "#ffd0b0", 5, 3); S.hitE();
+  if(s.hp <= 0){
+    s.hp = 0; s.dead = true; s.st = "down";
+    s.respawnT = 300; s.downT = 0; s.warn = 0;       // 5 秒后增援到场
+    score += 700; killCount++;
+    explode(s.x, s.y-22, "#ff9b4d", 18, 5);
+    sfx(190,.35,"sawtooth",.10,-70);
+    shake = Math.max(shake, 5);
+  }
+}
+function updateFortSniper(b, p){
+  const s = b.sniper;
+  if(!s) return;
+  s.animT++;
+  if(s.flash > 0) s.flash--;
+  if(s.st === "down"){
+    // 阵亡 → 倒计时，5 秒（300 帧）后增援从瞭望台右侧走进来
+    s.downT++; s.respawnT--;
+    if(s.respawnT <= 0){
+      s.st = "walkin"; s.dead = false; s.hp = 2; s.maxHp = 3;
+      s.x = s.homeX + 148; s.face = -1; s.warn = 0; s.cd = 0;
+      sfx(420,.10,"square",.05,120);
+    }
+    return;
+  }
+  if(s.st === "walkin"){
+    // 增援：沿瞭望台一路走过来，走到岗位后接班
+    s.x -= 1.35; s.face = -1;
+    if(s.x <= s.homeX){
+      s.x = s.homeX; s.st = "idle"; s.hp = 3; s.cd = 70;
+      sfx(320,.10,"square",.05);
+    }
+    return;
+  }
+  // 驻守：激光预警 → 开枪
+  const tx = p.x + p.w/2, ty = chestY();
+  s.aim = Math.atan2(ty - (s.y - 28), tx - s.x);
+  s.face = (tx < s.x) ? -1 : 1;
+  if(b.dead || p.dead){ s.warn = 0; return; }
+  if(s.warn > 0){
+    s.warn--;
+    if(s.warn === 0){
+      enemyShot(s.x + s.face*14, s.y - 28, tx, ty, 6.0, 0.05, 200);
+      s.flash = 7; s.cd = 105 + Math.random()*55;
+      sfx(1300,.07,"square",.045,-420);
+    }
+  } else if(s.cd > 0){
+    s.cd--;
+  } else if(Math.abs(tx - s.x) < 920){
+    s.warn = 30;
+  }
+}
+
 function startGame(){
-  bullets=[]; ebullets=[]; enemies=[]; particles=[];
+  bullets=[]; ebullets=[]; enemies=[]; particles=[]; ironBalls=[];
   cam=0; lives=3; score=0; killCount=0;
   checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; bannerT=0;
   loadLevel(1);
@@ -618,7 +787,7 @@ function startGame(){
 }
 // 第一关结束 → 进入第二关（保留分数，补 2 条命）
 function nextLevel(){
-  bullets=[]; ebullets=[]; enemies=[]; particles=[]; ebullets=[];
+  bullets=[]; ebullets=[]; enemies=[]; particles=[]; ebullets=[]; ironBalls=[];
   cam=0; checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; shake=0;
   loadLevel(2);
   makeBoss(2);
@@ -1281,6 +1450,11 @@ function update(){
         // 三种非弹幕攻击（电弧 / 激光 / 落锤）
         updateReactorSpecials(b, p);
       } else {
+        // 首发：巨型黑铁弹（比所有炮火都先出手），之后每 330 帧补一颗
+        b.ballT = (b.ballT||0) + 1;
+        if(!b.ballLock && (b.ballT === 24 || (b.ballT > 24 && b.ballT % 330 === 0))) spawnIronBall(b);
+        // 瞭望台狙击兵（阵亡 5 秒后由增援接替）
+        updateFortSniper(b, p);
         if(b.t % 140 === 0) spawnRunner(true); // 要塞召唤小兵
         // 火炮：交替三向扇形散射
         for(const c of b.cannons){
@@ -1309,6 +1483,8 @@ function update(){
       }
     }
   }
+  // 黑铁巨弹推进（物理滚动 / 与主角、木箱、子弹的交互都在里面）
+  updateIronBalls();
 
   // ----- 子弹 -----
   for(const bl of bullets){
@@ -1336,6 +1512,16 @@ function update(){
           const d = Math.hypot((e.x+e.w/2)-(bl.x+7), (e.y+e.h/2)-(bl.y+7));
           if(d<85) damageEnemy(e, 3);
         }
+        // 炸弹同样能炸碎黑铁弹 / 炸掉狙击兵
+        for(const ball of ironBalls){
+          if(ball.dead) continue;
+          if(Math.hypot(ball.x-(bl.x+7), ball.y-(bl.y+7)) < 88){
+            ball.hp -= 3; ball.flash = 6;
+            if(ball.hp <= 0) blastIronBall(ball, false);
+          }
+        }
+        const bsx2 = sniperBox();
+        if(bsx2 && Math.hypot((bsx2.x+11)-(bl.x+7), (bsx2.y+20)-(bl.y+7)) < 92) damageSniper(3);
         if(boss.active && !boss.dead){
           for(const c of boss.cannons){
             if(c.dead) continue;
@@ -1374,6 +1560,18 @@ function update(){
           }
         }
       }
+      // 镭射同样能击碎黑铁弹 / 打死瞭望台狙击兵
+      for(const ball of ironBalls){
+        if(ball.dead) continue;
+        if(!bl.hitBalls) bl.hitBalls = new Set();
+        if(bl.hitBalls.has(ball)) continue;
+        if(hitTest({x:ball.x-ball.r, y:ball.y-ball.r, w:ball.r*2, h:ball.r*2})){
+          bl.hitBalls.add(ball); ball.hp -= 3; ball.flash = 6;
+          if(ball.hp <= 0) blastIronBall(ball, false);
+        }
+      }
+      const sbx = sniperBox();
+      if(sbx && !bl.hitSniper && hitTest(sbx)){ bl.hitSniper = true; damageSniper(3); }
       if(boss.active && !boss.dead){
         for(const c of boss.cannons){
           if(!c.dead && !bl.hit.has(c) && hitTest(c)){
@@ -1403,6 +1601,23 @@ function update(){
         }
         break;
       }
+    }
+    // 打黑铁巨弹（可以打碎，打碎即安全拆除）
+    if(bl.life>0){
+      for(const ball of ironBalls){
+        if(ball.dead) continue;
+        if(aabb(bl, {x:ball.x-ball.r, y:ball.y-ball.r, w:ball.r*2, h:ball.r*2})){
+          bl.life = 0; ball.hp -= (bl.dmg||1); ball.flash = 5;
+          explode(bl.x, bl.y, "#ffe86b", 6, 3); S.hitE();
+          if(ball.hp <= 0) blastIronBall(ball, false);
+          break;
+        }
+      }
+    }
+    // 打瞭望台狙击兵
+    if(bl.life>0){
+      const sb = sniperBox();
+      if(sb && aabb(bl, sb)){ bl.life = 0; damageSniper(bl.dmg||1); }
     }
     // 打敌人
     for(const e of enemies){
@@ -1625,6 +1840,8 @@ function killCore(){
   explode(core.x+core.w/2, core.y+core.h/2, "#ff5b3d", 40, 7); shake=30;
   // Boss 倒下即清场：全屏小兵不再刷新，也不再干扰通关演出
   enemies = [];
+  ironBalls = [];
+  if(boss.sniper) boss.sniper.st = "down";
   ebullets = ebullets.filter(b => Math.abs(b.x - (core.x+core.w/2)) > 320);
   setTimeout(()=>{ state="walkin"; stateTimer=0; }, 1600); // 爆炸过后主角自动走向大门
 }
@@ -3114,6 +3331,126 @@ function drawReactor(){
     ctx.textAlign="left";
   }
 }
+// 要塞瞭望台上的狙击兵（站 / 走位增援 / 阵亡倒计时三种状态）
+function drawFortSniper(s, floorY){
+  if(!s) return;
+  const y = floorY, x = s.x - cam;
+  if(s.st === "down"){
+    // 阵亡：台上留下一顶尖盔和摔落的步枪，并显示增援倒计时
+    ctx.fillStyle="#3c4a2b"; ctx.beginPath(); ctx.arc(x+6, y-6, 8, Math.PI, 0); ctx.fill();
+    ctx.fillStyle="#2a3420"; ctx.fillRect(x-2, y-6, 16, 3);
+    ctx.fillStyle="#232a2f"; ctx.fillRect(x-28, y-4, 26, 3.2);
+    ctx.fillStyle="#39434a"; ctx.fillRect(x-6, y-5, 6, 2.4);
+    if(s.respawnT > 0){
+      ctx.globalAlpha = .85;
+      ctx.fillStyle="#ff5b3d"; ctx.font="bold 10px monospace"; ctx.textAlign="center";
+      ctx.fillText("增援 " + Math.ceil(s.respawnT/60) + "s", x, y-20);
+      ctx.textAlign="left"; ctx.globalAlpha = 1;
+    }
+    return;
+  }
+  const walking = s.st === "walkin";
+  const bob = walking ? Math.sin(s.animT*0.36)*1.6 : 0;
+  const dir = s.face;
+  // ---- 蓄势预警：红色瞄准激光直指主角 ----
+  if(!walking && s.warn > 0 && !player.dead){
+    const mx = s.x + dir*13 - cam, my = y - 28;
+    const ex = player.x + player.w/2 - cam, ey = chestY();
+    ctx.globalAlpha = .22 + .30*Math.abs(Math.sin(perfNow/70));
+    ctx.strokeStyle = "#ff3b1f"; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.globalAlpha = .95; ctx.fillStyle="#ff5b3d";
+    ctx.beginPath(); ctx.arc(ex, ey, 3.4, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // ---- 身体（朝左/朝右镜像） ----
+  ctx.save(); ctx.translate(x, y + bob); ctx.scale(dir, 1);
+  // 腿
+  ctx.fillStyle="#2f3a26";
+  if(walking){
+    const lo = Math.sin(s.animT*0.36)*5;
+    ctx.fillRect(-7, -16, 6, 16 + lo*0.5); ctx.fillRect(1, -16, 6, 16 - lo*0.5);
+  } else { ctx.fillRect(-7, -16, 6, 16); ctx.fillRect(1, -16, 6, 16); }
+  ctx.fillStyle="#191e1c"; ctx.fillRect(-8, -3.4, 8, 3.4); ctx.fillRect(0, -3.4, 8, 3.4);
+  // 躯干：迷彩 + 战术背心 + 弹匣袋
+  ctx.fillStyle="#4a5836"; ctx.fillRect(-8, -30, 16, 16);
+  ctx.fillStyle="#5f7146"; ctx.fillRect(-8, -30, 16, 3);
+  ctx.fillStyle="#33402a"; ctx.fillRect(-6, -26, 12, 9);
+  ctx.fillStyle="#222b1c"; ctx.fillRect(-6, -22, 12, 2.4);
+  ctx.fillStyle="#4a5836"; ctx.fillRect(-9, -29, 4, 9);          // 前肩
+  // 头 + 护目镜
+  ctx.fillStyle="#c9a17a"; ctx.fillRect(-5, -40, 10, 10);
+  ctx.fillStyle="#0f1418"; ctx.fillRect(-2, -36, 5, 2.6);
+  // 钢盔 + 伪装草叶
+  ctx.fillStyle="#3c4a2b"; ctx.beginPath(); ctx.arc(0, -40, 7.6, Math.PI, 0); ctx.fill();
+  ctx.fillRect(-7.6, -41, 15.2, 3);
+  ctx.fillStyle="#2a3420"; ctx.fillRect(-8.4, -38.8, 17, 2.2);
+  ctx.fillStyle="#6d7d4a";
+  for(let k=-6; k<=6; k+=4) ctx.fillRect(k, -46.6, 2.4, 4.2);
+  ctx.restore();
+  // ---- 狙击枪：沿真实瞄准方向旋转（不镜像） ----
+  const shx = s.x - cam + s.face*2, shy = y - 27 + bob;
+  ctx.save(); ctx.translate(shx, shy);
+  ctx.rotate(walking ? -0.55 : s.aim);
+  ctx.fillStyle="#232a2f"; ctx.fillRect(-7, -3.2, 12, 7.4);      // 枪托 / 机匣
+  ctx.fillStyle="#3a444c"; ctx.fillRect(4, -2, 26, 3.6);         // 枪管
+  ctx.fillStyle="#151a1e"; ctx.fillRect(27, -4.2, 6, 8.4);       // 消焰器
+  ctx.fillStyle="#0d1114"; ctx.fillRect(8, -6.6, 13, 3.8);       // 瞄准镜
+  ctx.fillStyle="#6ad0ff"; ctx.fillRect(9, -7.6, 3, 1.8);        // 镜片反光
+  if(s.flash > 0){
+    ctx.globalAlpha = .95;
+    ctx.fillStyle="#ffe58a";
+    ctx.beginPath(); ctx.moveTo(32,-6); ctx.lineTo(48,0); ctx.lineTo(32,6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle="#fffbe0"; ctx.beginPath(); ctx.arc(34,0,5,0,7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+// 黑铁巨弹：漆黑的实心铁球（带旋转铆钉、滚动扬尘与投影）
+function drawIronBalls(){
+  for(const ball of ironBalls){
+    const x = ball.x - cam, y = ball.y, r = ball.r;
+    const gy = groundYAt(ball.x);
+    if(gy < Infinity){
+      const d = Math.max(0, Math.min(1, (gy - (y + r)) / 280));
+      ctx.globalAlpha = 0.34 * (1 - d*0.6);
+      ctx.fillStyle = "#000";
+      ctx.beginPath(); ctx.ellipse(x, gy-3, r*(1 - d*0.22), 6*(1 - d*0.22), 0, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // 滚动时的热浪残影
+    if(ball.rolling && Math.floor(perfNow/70)%2===0){
+      ctx.globalAlpha = .16; ctx.fillStyle="#ff9b4d";
+      ctx.beginPath(); ctx.arc(x - Math.sign(ball.vx)*r*1.4, y, r*0.92, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.save(); ctx.translate(x, y);
+    const g = ctx.createRadialGradient(-r*0.35, -r*0.42, r*0.12, 0, 0, r*1.12);
+    g.addColorStop(0, "#5c5c68"); g.addColorStop(.42, "#2a2a32"); g.addColorStop(1, "#07070b");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    // 随滚动旋转的焊缝 + 铆钉（一眼看出它在滚）
+    ctx.save(); ctx.rotate(ball.spin);
+    ctx.strokeStyle = "rgba(126,126,146,.5)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, r*0.72, 0, 7); ctx.stroke();
+    ctx.fillStyle = "#7b7b8e";
+    for(let k=0;k<4;k++){
+      const a = k*Math.PI/2 + Math.PI/4;
+      ctx.beginPath(); ctx.arc(Math.cos(a)*r*0.72, Math.sin(a)*r*0.72, 2.6, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = "rgba(150,150,170,.32)"; ctx.fillRect(-r, -1.4, r*2, 2.8);
+    ctx.restore();
+    // 金属高光 + 边缘反光
+    ctx.fillStyle = "rgba(232,232,255,.17)";
+    ctx.beginPath(); ctx.arc(-r*0.36, -r*0.42, r*0.34, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(120,130,150,.45)"; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(0, 0, r-1.2, 0.5, 2.6); ctx.stroke();
+    if(ball.flash > 0){
+      ctx.globalAlpha = ball.flash/6*0.6; ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+}
 function drawBoss(){
   if(boss.kind === "reactor") return drawReactor();
   const b = boss, wx = b.wallX - cam;
@@ -3173,6 +3510,44 @@ function drawBoss(){
     ctx.arc(px+12, GROUND_Y-14, 12, Math.PI*0.15, Math.PI*0.85, true);
     ctx.stroke();
   }
+
+  // ================= 高处瞭望台（悬挑装甲栈台 + 狙击兵驻守） =================
+  const twX = wx - 190, twY = 150, twW = 262;
+  // 悬挑斜撑
+  ctx.strokeStyle="#2b3138"; ctx.lineWidth=7;
+  ctx.beginPath(); ctx.moveTo(twX+42, twY+12); ctx.lineTo(twX+120, twY+108); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(twX+twW-10, twY+12); ctx.lineTo(twX+twW-70, twY+108); ctx.stroke();
+  ctx.strokeStyle="#454e58"; ctx.lineWidth=2.2;
+  ctx.beginPath(); ctx.moveTo(twX+42, twY+13); ctx.lineTo(twX+120, twY+108); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(twX+twW-10, twY+13); ctx.lineTo(twX+twW-70, twY+108); ctx.stroke();
+  // 台底桁架 + 台面钢板
+  ctx.fillStyle="#20262c"; ctx.fillRect(twX, twY+18, twW, 5);
+  ctx.fillStyle="#31383f"; ctx.fillRect(twX, twY+6, twW, 13);
+  ctx.fillStyle="#4b545e"; ctx.fillRect(twX, twY, twW, 7);
+  ctx.fillStyle="#5f6a76"; ctx.fillRect(twX, twY, twW, 2);
+  ctx.fillStyle="#242a30";
+  for(let s=4; s<twW-4; s+=11) ctx.fillRect(twX+s, twY+9, 6, 2);
+  // 悬挑端警示灯
+  ctx.fillStyle = Math.floor(perfNow/380)%2===0 ? "#ff3b1f" : "#4a1004";
+  ctx.fillRect(twX+3, twY-7, 6, 5);
+  // 右侧爬梯（从台面下到墙里）
+  ctx.fillStyle="#2d343b";
+  ctx.fillRect(twX+twW-26, twY+24, 3, GROUND_Y-twY-24);
+  ctx.fillRect(twX+twW-10, twY+24, 3, GROUND_Y-twY-24);
+  ctx.fillStyle="#3e4750";
+  for(let s=twY+30; s<GROUND_Y-8; s+=14) ctx.fillRect(twX+twW-26, s, 19, 2.6);
+
+  // 狙击兵本体
+  drawFortSniper(b.sniper, twY);
+  // 左侧护栏 + 沙袋（掩体，正好挡住瞭望台左半段）
+  ctx.fillStyle="#39424a";
+  for(let s=8; s<96; s+=26) ctx.fillRect(twX+s, twY-22, 3.4, 22);
+  ctx.fillStyle="#4d5761"; ctx.fillRect(twX, twY-23, 98, 3.4);
+  ctx.fillStyle="#5d6874"; ctx.fillRect(twX, twY-23, 98, 1.4);
+  ctx.fillStyle="#6b6248";
+  for(let s=6; s<88; s+=22){ ctx.fillRect(twX+s, twY-11, 20, 11); }
+  ctx.fillStyle="#7a7054";
+  for(let s=6; s<88; s+=22){ ctx.fillRect(twX+s, twY-11, 20, 3); }
 
   // ================= 中央大门（核心） =================
   // 门洞（背后是黑）
@@ -3518,6 +3893,7 @@ function render(){
   drawDrops();
   for(const e of enemies) drawSoldier(e);
   drawBoss();
+  drawIronBalls();
   if(player.slideT > 0) drawPlayerSlide();
   else if(player.rolling && !player.onGround) drawPlayerRoll();
   else if(player.crouch) drawPlayerCrouch(); else drawPlayer();

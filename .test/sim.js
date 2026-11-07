@@ -69,6 +69,11 @@ globalThis.__D = {
   get mini(){return mini}, get miniSpawned(){return miniSpawned},
   get MINI_ARENA_L(){return MINI_ARENA_L}, get MINI_ARENA_R(){return MINI_ARENA_R},
   get L4_W(){return L4_W},
+  advanceTo, startStageBreak,
+  get miniArena(){return miniArena},
+  get STAGE_BREAK(){return STAGE_BREAK}, get STAGE_INFO(){return STAGE_INFO},
+  stageLabel:(n)=>stageLabel(n), themePal:(n)=>themePal(n),
+  get L5_W(){return L5_W}, get L6_W(){return L6_W}, get L7_W(){return L7_W}, get L8_W(){return L8_W},
   get score(){return score}, set score(v){score=v},
 };
 `;
@@ -777,6 +782,114 @@ ok("炸弹武器的子弹有自己的冷却（不会和投弹抢节奏）", pwb.
    "bulletCd=" + pwb.bulletCd + " fireCd=" + pwb.fireCd);
 
 }
+// ================= 第五~八关：全球母舰 =================
+console.log("\n【9】第五~八关 · 全球母舰");
+{
+  const WID = {5: D.L5_W, 6: D.L6_W, 7: D.L7_W, 8: D.L8_W};
+  for (const n of [5, 6, 7, 8]) {
+    D.p.weapon = "L"; D.p.wlv.L = 2;
+    D.advanceTo(n);
+    step(2);
+    ok(`第 ${n} 关 载入（${D.stageLabel(n)}）`, D.LEVEL_IDX === n && D.state === "play",
+       "关卡 " + D.LEVEL_IDX + " state=" + D.state);
+    let voids = 0, firstVoid = -1;
+    for (let x = 0; x < WID[n]; x += 40) {
+      if (D.groundYAt(x) === Infinity) { voids++; if (firstVoid < 0) firstVoid = x; }
+    }
+    ok(`第 ${n} 关 地面全程连续（无断崖）`, voids === 0,
+       voids ? voids + " 处悬空，首个 x=" + firstVoid : "全长 " + WID[n] + "px");
+    const aliens = D.triggers.filter(t => ["claw", "spit", "eye"].includes(t.type)).length;
+    ok(`第 ${n} 关 沿途有外星守军`, aliens >= 8, "外星兵触发点 " + aliens + " 个");
+    ok(`第 ${n} 关 武器跨关保留`, D.p.weapon === "L" && D.p.wlv.L === 2,
+       D.p.weapon + " Lv" + (D.p.wlv.L + 1));
+    const expectNodes = (n === 5 || n === 6) ? 4 : 5;
+    ok(`第 ${n} 关 Boss 是「${D.boss.name}」`, D.boss.kind === "carrier" && D.boss.cannons.length === expectNodes,
+       D.boss.kind + " / 节点 " + D.boss.cannons.length + " / 核心 " + D.boss.core.maxHp);
+  }
+
+  // 血量与难度阶梯
+  D.advanceTo(4); step(2);
+  const l4 = { core: D.boss.core.maxHp, eye: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
+  D.advanceTo(5); step(2);
+  const l5 = { core: D.boss.core.maxHp, node: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
+  D.advanceTo(8); step(2);
+  const l8 = { core: D.boss.core.maxHp, node: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
+  ok("第四关 Boss 大幅强化（核心 70→150 / 眼睛 14→26）", l4.core >= 150 && l4.eye >= 26,
+     "核心 " + l4.core + " / 眼 " + l4.eye);
+  ok("第四关小 Boss 血量翻倍（90→170）", l4.mini >= 170, "hp=" + l4.mini);
+  ok("Boss 血量逐关抬升（4→5→8）", l4.core < l5.core && l5.core < l8.core,
+     l4.core + " → " + l5.core + " → " + l8.core);
+  ok("小 Boss 血量逐关抬升", l4.mini < l5.mini && l5.mini < l8.mini,
+     l4.mini + " → " + l5.mini + " → " + l8.mini);
+
+  // 小 Boss 二阶段狂暴
+  D.advanceTo(5); step(2);
+  D.p.x = D.miniArena.l + 80;
+  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
+  step(3);
+  ok("第五关 走进母舰中段触发守卫", !!D.mini && D.mini.hp === D.miniArena.hp,
+     D.mini ? D.mini.name + " hp=" + D.mini.hp : "没刷出来");
+  const rage0 = D.mini.rage;
+  D.mini.hp = Math.ceil(D.mini.maxHp * 0.45);
+  step(2);
+  ok("小 Boss 半血进入狂暴（攻速/速度提升）", D.mini.rage === true && !rage0,
+     "rage=" + D.mini.rage);
+  D.mini.hp = 0; D.mini.dead = true;
+  step(4);
+  ok("击败守卫解锁通道", D.mini.rewarded === true, "rewarded=" + D.mini.rewarded);
+
+  // 母舰核心战：节点护盾 → 三连攻击 → 主题杀招 → 破盾
+  D.advanceTo(5); step(2);
+  D.p.x = D.boss.wallX - 320;
+  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.inv = 99999;
+  step(4);
+  ok("走到母舰核心激活 Boss", D.boss.active === true, "active=" + D.boss.active);
+  let sawWarn2 = false, sawBurst = false, sawSpecial = false;
+  const spTypes = new Set();
+  for (let i = 0; i < 900; i++) {
+    step(1); D.p.inv = 99999;
+    for (const c of D.boss.cannons) {
+      if (c.warnT > 0) sawWarn2 = true;
+      if (c.burst > 0) sawBurst = true;
+    }
+    for (const s of D.boss.specials) { sawSpecial = true; spTypes.add(s.type); }
+  }
+  ok("节点荚先预警再开火（不是无提示扫射）", sawWarn2 && sawBurst,
+     "预警=" + sawWarn2 + " 连发=" + sawBurst);
+  ok("深海母舰有专属杀招（电浆柱）", sawSpecial && spTypes.has("bolt"),
+     "出现过：" + [...spTypes].join("、"));
+  ok("节点没打完时核心带护盾", D.boss.core.shielded === true, "shielded=" + D.boss.core.shielded);
+  for (const c of D.boss.cannons) { c.hp = 0; c.dead = true; }
+  step(2);
+  ok("打掉全部节点后核心破盾", D.boss.core.shielded === false, "shielded=" + D.boss.core.shielded);
+  D.boss.core.hp = Math.floor(D.boss.core.maxHp * 0.4);
+  step(2);
+  ok("核心半血进入二阶段", D.boss.phase === 2, "phase=" + D.boss.phase);
+  D.boss.core.hp = 0; D.boss.core.dead = true;
+  D.killCore();
+  ok("击穿母舰核心", D.boss.dead === true, "boss.dead=" + D.boss.dead);
+
+  // 关卡过场：字幕 → 下一关
+  D.startStageBreak(6);
+  step(2);
+  ok("击穿后进入关卡过场（剧情字幕）", D.state === "stagebreak" && !D.boss,
+     "state=" + D.state);
+  step(340);
+  ok("过场结束自动进入下一艘母舰", D.LEVEL_IDX === 6 && D.state === "play",
+     "关卡 " + D.LEVEL_IDX + " state=" + D.state);
+
+  // 第八关通关 → 结局
+  D.advanceTo(8); step(2);
+  ok("最终关是轨道母巢", D.LEVEL_IDX === 8 && D.boss.kind === "carrier" && D.boss.tint === "space",
+     D.boss.name);
+  D.boss.active = true;
+  D.boss.core.hp = 0; D.boss.core.dead = true;
+  D.killCore();
+  ok("击穿母巢核心 → 全剧终判定", D.boss.dead === true, "boss.dead=" + D.boss.dead);
+  const tints = [5, 6, 7, 8].map(n => D.themePal(n).accent);
+  ok("五~八关各有独立配色主题", new Set(tints).size === 4, tints.join(" "));
+}
+
 // ================= 渲染不报错 =================
 console.log("\n【6】渲染");
 let renderErr = null;

@@ -5,6 +5,7 @@ let html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
 
 const inject = `
 <script>
+window.onerror = function(m, s, l, c, e){ document.title = "JSERR: " + m + " @" + l + ":" + c; };
 window.addEventListener("load", () => {
   const q = new URLSearchParams(location.search);
   const mode = q.get("m") || "stand";
@@ -177,6 +178,45 @@ window.addEventListener("load", () => {
     } else if (mode === "jump") {
       place(700); cam = 520;
       p.y -= 90; p.onGround = false; p.vy = -2; p.face = 1; p.aimAng = Math.PI/2;
+    } else if (mode === "l5" || mode === "l6" || mode === "l7" || mode === "l8") {
+      const n = +mode.slice(1);
+      advanceTo(n); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      const base = { 5: 1500, 6: 1600, 7: 1700, 8: 1800 }[n];
+      place(base); cam = base - 260;
+      player.face = 1; player.aimAng = 0; player.inv = 0;
+      enemies.push(makeAlien(base + 160, groundYAt(base + 160), "claw"));
+      enemies.push(makeAlien(base - 90, groundYAt(base - 90), "spit"));
+      enemies.push(makeAlien(base + 300, 200, "eye"));
+      player.weapon = "L"; player.wlv.L = 2;
+      ebullets.push({x: base + 380, y: p.y + 8, w: 7, h: 7, vx: -6, vy: 0, life: 200, shell: true, r: 5.6});
+    } else if (mode === "l5boss" || mode === "l6boss" || mode === "l7boss" || mode === "l8boss") {
+      const n = +mode.slice(1, 2);
+      advanceTo(n); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      boss.active = true; boss.t = 220;
+      if (n === 5) {
+        boss.specials.push({type:"bolt", x: boss.wallX - 340, t: 0, warn: 18, beam: 0, hit: false});
+        boss.cannons[0].warnT = 14; boss.cannons[1].burst = 2; boss.cannons[1].gunA = Math.PI - 0.1;
+      } else if (n === 6) {
+        boss.specials.push({type:"spike", x: boss.wallX - 300, t: 0, warn: 0, up: 1, hit: false, hold: 4});
+        boss.specials.push({type:"spike", x: boss.wallX - 430, t: 0, warn: 28, up: 0, hit: false, hold: 0});
+        boss.cannons[0].warnT = 16;
+      } else if (n === 7) {
+        boss.specials.push({type:"ice", x: boss.wallX - 300, y: 150, vy: 5, t: 0, warn: 0, hit: false, dead: false});
+        boss.specials.push({type:"ice", x: boss.wallX - 440, y: 60, vy: 4, t: 0, warn: 0, hit: false, dead: false});
+        boss.cannons[0].warnT = 18; boss.cannons[2].warnT = 8;
+      } else {
+        boss.core.hp = Math.floor(boss.core.maxHp * 0.4);
+        boss.specials.push({type:"rail", t: 60, warn: 0, fire: 60, y0: p.y + 18, y1: p.y + 18, hit: false});
+        for (const c of boss.cannons) { c.hp = 0; c.dead = true; }
+      }
+      place(boss.wallX - 360); cam = boss.wallX - 760;
+      player.face = 1; player.aimAng = 0; player.inv = 0;
+      player.weapon = "L"; player.wlv.L = 2;
+    } else if (mode === "stagebreak") {
+      state = "stagebreak"; stateTimer = 200; nextStageIdx = 6;
+      boss = null;
     } else if (mode === "l4") {
       startAlienLair(); state = "play"; stateTimer = 0; bannerT = 0;
       enemies.length = 0; ebullets.length = 0;

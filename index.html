@@ -529,8 +529,195 @@ const L4_MEDALS = [
 const L4_CRATES_X = [1380, 2760, 4360, 6640, 8240, 9860];
 const L4_PACKAGES_X = [1320, 1420, 2700, 2800, 4300, 4400, 6580, 6680, 8180, 8280];
 // 小 Boss 战场（巢穴中段的"孵化厅"）
+let miniArena = {l:4680, r:5900, x:5240, name:"外星督军 · 孵化厅守卫", hp:170, tone:"alien"};
+// 兼容旧测试/旧代码
+let MINI_ARENA_L = 4680, MINI_ARENA_R = 5900;
 const MINI_ARENA_X = 5240;
-const MINI_ARENA_L = 4680, MINI_ARENA_R = 5900;
+
+// ================================================================
+//  关卡主题：配色 / 背景 / 关卡文案（4~8 关共用一套外观系统）
+// ================================================================
+const STAGE_INFO = {
+  1:{name:"丛林突击", color:"#7fd7a0", sub:"热带丛林 —— 敌军前线哨所"},
+  2:{name:"基地突入", color:"#7fbcff", sub:"潜入敌军基地 —— 摧毁反应堆核心"},
+  3:{name:"逃出基地", color:"#ff8b7a", sub:"逃出基地 —— 回头跑！出口在最左边"},
+  4:{name:"外星巢穴", color:"#c08bff", sub:"叛军的科技原来来自这里 —— 打进母舰核心"},
+  5:{name:"深海母舰", color:"#5cd8ff", sub:"马里亚纳海沟 4200 米 —— 海底的供能舰还在跳"},
+  6:{name:"沙海母舰", color:"#ffc85c", sub:"撒哈拉沙下 —— 它用天气当武器"},
+  7:{name:"冰盖母舰", color:"#9fe8ff", sub:"北极冰盖之下 —— 融冰就是它的倒计时"},
+  8:{name:"轨道母舰", color:"#ff7ad0", sub:"近地轨道 · 母巢 —— 最后一战，没有地面"},
+};
+function stageLabel(n){ return "第 " + n + " 关 · " + STAGE_INFO[n].name; }
+
+const LEVEL_THEME = {1:"jungle", 2:"factory", 3:"factory", 4:"alien", 5:"sea", 6:"sand", 7:"ice", 8:"space"};
+const THEMES = {
+  factory: {dk0:"#0d131a", dk1:"#05080c", floor:"#242b34", beam:"#1b222b", top:"#6d7b8c",
+            warn:"#c8a02a", rivet:"#8794a3", edge:"rgba(255,120,30,.5)", platBody:"#2f3843",
+            platTop:"#6d7b8c", platBot:"#1c232b", accent:"#ffb347",
+            wall0:"#1a1024", wall1:"#221532", vein:"rgba(125,252,232,.22)", spike:"#3a2453"},
+  alien:   {dk0:"#140c1e", dk1:"#05030a", floor:"#2a2038", beam:"#1d1728", top:"#7a5aa8",
+            warn:"#4a3568", rivet:"#8f7bb8", edge:"rgba(125,252,232,.5)", platBody:"#33254a",
+            platTop:"#8a68bd", platBot:"#1d1529", accent:"#7dfce8",
+            wall0:"#1a1024", wall1:"#221532", vein:"rgba(125,252,232,.22)", spike:"#3a2453"},
+  sea:     {dk0:"#04202c", dk1:"#01080e", floor:"#0e3340", beam:"#0a2531", top:"#3f9fb8",
+            warn:"#2b7f92", rivet:"#8fdcea", edge:"rgba(92,216,255,.55)", platBody:"#12414f",
+            platTop:"#4fb4cc", platBot:"#08222c", accent:"#5cd8ff",
+            wall0:"#06202c", wall1:"#0a2c3a", vein:"rgba(92,216,255,.28)", spike:"#1a4a5c"},
+  sand:    {dk0:"#2a1c0c", dk1:"#0d0803", floor:"#4a3520", beam:"#33240f", top:"#b08a4a",
+            warn:"#8a6420", rivet:"#e0c083", edge:"rgba(255,200,92,.5)", platBody:"#5c4326",
+            platTop:"#c9a25c", platBot:"#2a1c0c", accent:"#ffc85c",
+            wall0:"#2e2010", wall1:"#3a2a16", vein:"rgba(255,200,92,.26)", spike:"#5c4326"},
+  ice:     {dk0:"#08202e", dk1:"#020a10", floor:"#1a3a4a", beam:"#12303f", top:"#7fc8e0",
+            warn:"#3a7f9c", rivet:"#d6f4ff", edge:"rgba(159,232,255,.55)", platBody:"#20485a",
+            platTop:"#8fd8ec", platBot:"#0c2634", accent:"#9fe8ff",
+            wall0:"#0a2434", wall1:"#103040", vein:"rgba(159,232,255,.26)", spike:"#224a5c"},
+  space:   {dk0:"#0a0714", dk1:"#020105", floor:"#231a33", beam:"#1a1327", top:"#8c74b8",
+            warn:"#5a3f7a", rivet:"#d8c8ff", edge:"rgba(255,122,208,.5)", platBody:"#2b2040",
+            platTop:"#9d7fd0", platBot:"#120c1c", accent:"#ff7ad0",
+            wall0:"#130a20", wall1:"#1c0f2e", vein:"rgba(255,122,208,.24)", spike:"#3a2050"},
+};
+function themePal(n){
+  return THEMES[LEVEL_THEME[n || LEVEL_IDX]] || THEMES.factory;
+}
+
+// ================================================================
+//  第 5~8 关：用生成器铺地形（连续地面，绝不断崖），再手工控制节奏
+// ================================================================
+function stageRand(seed){
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
+// 连续地面：三层台阶之间游走（0 / -stepH / -2*stepH），全程无空洞
+function mkGround(w, seed, baseY, stepH, segMin, segMax){
+  const rnd = stageRand(seed);
+  const pts = [[-100, baseY]];
+  let x = 0, lv = 0;
+  while(x < w - 200){
+    x += segMin + rnd()*(segMax - segMin);
+    if(rnd() < 0.55){
+      lv = Math.max(0, Math.min(2, lv + (rnd() < 0.5 ? -1 : 1)));
+    } else if(rnd() < 0.35){
+      lv = 0;
+    }
+    pts.push([Math.round(x), baseY - lv*stepH]);
+  }
+  pts.push([w + 300, baseY - lv*stepH]);
+  return [{pts}];
+}
+// 空中栈桥：均匀分布 + 抖动，避开小 Boss 场地与 Boss 前沿
+function mkPlatforms(w, seed, n, avoid){
+  const rnd = stageRand(seed);
+  const out = [];
+  for(let i=1;i<=n;i++){
+    let x = Math.round(w*i/(n+1) + (rnd()-0.5)*300);
+    x = Math.max(140, Math.min(w-900, x));
+    if(avoid.some(a => x + 200 > a.l && x < a.r)) continue;
+    const y = 268 + Math.round(rnd()*62);
+    out.push({x, y, w:150 + Math.round(rnd()*70), h:16});
+  }
+  return out;
+}
+// 敌人触发点：沿途布防（px 为敌人落位，py 为悬浮单位高度）
+function mkTriggers(w, seed, types, gapMin, gapMax){
+  const rnd = stageRand(seed);
+  const out = [];
+  let x = 300;
+  while(x < w - 1250){
+    const t = types[Math.floor(rnd()*types.length)];
+    const px = x + 480 + rnd()*220;
+    out.push({x:Math.round(x), type:t, px:Math.round(px),
+              py: Math.round(150 + rnd()*120)});
+    x += gapMin + rnd()*(gapMax - gapMin);
+  }
+  return out;
+}
+// 武器补给：每 1650px 一个，S/M/L/B 轮换（y 在 loadLevel 里按地面高度换算）
+function mkPowerups(w){
+  const order = ["S","M","L","B"];
+  const out = [];
+  let i = 0;
+  for(let x = 900; x < w - 900; x += 1650){
+    out.push({type: order[i%4], x, dy: 96});
+    i++;
+  }
+  return out;
+}
+function mkMedals(w){
+  const out = [];
+  for(let x = 2050; x < w - 1200; x += 2700) out.push({x, dy: 84});
+  return out;
+}
+
+// ---------- 第 5 关：深海母舰（太平洋海沟） ----------
+const L5_W = 10000;
+const L5_ARENA = {l:4480, r:5720, x:5060, name:"深海守卫 · 电鳐", hp:200, tone:"sea"};
+const L5_TERRAIN = mkGround(L5_W, 5501, 440, 44, 640, 1020);
+const L5_PLATFORMS = mkPlatforms(L5_W, 5502, 20, [L5_ARENA, {l:L5_W-1100, r:L5_W}]);
+const L5_CHECKPOINTS = [0,1400,2800,4200,5600,7000,8400,9600];
+const L5_TRIGGERS = mkTriggers(L5_W, 5503, ["claw","spit","eye","tank","claw","eye"], 220, 330);
+const L5_POWERUPS = mkPowerups(L5_W);
+const L5_MEDALS = mkMedals(L5_W);
+const L5_CRATES_X = [1200,2600,3900,6100,7300,8600];
+const L5_PACKAGES_X = [1140,1240,2540,2640,3840,3940,6040,6140,7240,7340];
+
+// ---------- 第 6 关：沙海母舰（撒哈拉沙下） ----------
+const L6_W = 10400;
+const L6_ARENA = {l:4720, r:5980, x:5300, name:"沙海守卫 · 蝎王", hp:240, tone:"sand"};
+const L6_TERRAIN = mkGround(L6_W, 6601, 440, 40, 600, 980);
+const L6_PLATFORMS = mkPlatforms(L6_W, 6602, 21, [L6_ARENA, {l:L6_W-1100, r:L6_W}]);
+const L6_CHECKPOINTS = [0,1500,3000,4500,6000,7500,8900,10000];
+const L6_TRIGGERS = mkTriggers(L6_W, 6603, ["claw","spit","eye","tank","roller","bomber","eye"], 210, 320);
+const L6_POWERUPS = mkPowerups(L6_W);
+const L6_MEDALS = mkMedals(L6_W);
+const L6_CRATES_X = [1300,2800,4100,6400,7700,9000];
+const L6_PACKAGES_X = [1240,1340,2740,2840,4040,4140,6340,6440,7640,7740];
+
+// ---------- 第 7 关：冰盖母舰（北极） ----------
+const L7_W = 10800;
+const L7_ARENA = {l:4960, r:6240, x:5550, name:"冰盖守卫 · 霜牙", hp:280, tone:"ice"};
+const L7_TERRAIN = mkGround(L7_W, 7701, 440, 42, 620, 1000);
+const L7_PLATFORMS = mkPlatforms(L7_W, 7702, 22, [L7_ARENA, {l:L7_W-1100, r:L7_W}]);
+const L7_CHECKPOINTS = [0,1500,3100,4700,6300,7800,9300,10400];
+const L7_TRIGGERS = mkTriggers(L7_W, 7703, ["claw","spit","eye","tank","sniper","drone","eye"], 200, 310);
+const L7_POWERUPS = mkPowerups(L7_W);
+const L7_MEDALS = mkMedals(L7_W);
+const L7_CRATES_X = [1350,2900,4300,6600,8000,9400];
+const L7_PACKAGES_X = [1290,1390,2840,2940,4240,4340,6540,6640,7940,8040];
+
+// ---------- 第 8 关：轨道母舰（近地轨道 · 最终关） ----------
+const L8_W = 11600;
+const L8_ARENA = {l:5180, r:6480, x:5800, name:"轨道守卫 · 星蛭", hp:330, tone:"space"};
+const L8_TERRAIN = mkGround(L8_W, 8801, 440, 46, 580, 940);
+const L8_PLATFORMS = mkPlatforms(L8_W, 8802, 22, [L8_ARENA, {l:L8_W-1200, r:L8_W}]);
+const L8_CHECKPOINTS = [0,1600,3300,5000,6700,8300,9900,11200];
+const L8_TRIGGERS = mkTriggers(L8_W, 8803, ["claw","spit","eye","tank","drone","eye","claw"], 190, 300);
+const L8_POWERUPS = mkPowerups(L8_W);
+const L8_MEDALS = mkMedals(L8_W);
+const L8_CRATES_X = [1400,3000,4600,7000,8500,10000];
+const L8_PACKAGES_X = [1340,1440,2940,3040,4540,4640,6940,7040,8440,8540];
+
+// 第 4~8 关 Boss 配置：节点（可击破）越多越硬，核心血量逐关抬升
+const CARRIER_CFG = {
+  5:{nodes:4, nodeHp:34, coreHp:230, tint:"sea",   special:"bolt",    name:"深海母舰 · 利维坦"},
+  6:{nodes:4, nodeHp:40, coreHp:290, tint:"sand",  special:"spike",   name:"沙海母舰 · 蝎王"},
+  7:{nodes:5, nodeHp:44, coreHp:350, tint:"ice",   special:"icefall", name:"冰盖母舰 · 霜牙"},
+  8:{nodes:5, nodeHp:54, coreHp:470, tint:"space", special:"rail",    name:"轨道母舰 · 母巢"},
+};
+// 4→5→6→7→8 的过场字幕
+const STAGE_BREAK = {
+  5:{title:"母舰沉了，坐标却亮了", lines:[
+      "主脑临死前把一组坐标发向全球 —— 太平洋海沟、撒哈拉、北极冰盖，还有头顶的轨道。",
+      "第一站：马里亚纳海沟 4200 米。海底有一座还在供能的母舰，叛军的电就是从这儿来的。"], color:"#5cd8ff"},
+  6:{title:"海底下线，沙漠上线", lines:[
+      "供能舰熄火，全球的叛军基地同时黑了一片。",
+      "可撒哈拉的沙丘开始逆着风移动 —— 第二艘母舰藏在沙下，它正在用天气当武器。"], color:"#ffc85c"},
+  7:{title:"沙暴停了，冰在化", lines:[
+      "沙下的舰体被埋回沙里。风暴停了，但北极的冰盖在四小时内退了十七公里。",
+      "第三艘母舰在冰层下抽水 —— 它在给轨道上的旗舰降温。"], color:"#9fe8ff"},
+  8:{title:"最后一艘，不在地球", lines:[
+      "冰盖封回原样，最后一组坐标指向头顶。",
+      "它不在地球——近地轨道上的母巢正在把主炮转向地面。这一战，没有地面可以站。"], color:"#ff7ad0"},
+};
 
 // ---------- 当前关卡装配 ----------
 let LEVEL_IDX = 1;
@@ -562,12 +749,16 @@ function loadLevel(n){
   redPools = []; debris = []; debrisT = 0; finalRun = false;
   ironBalls = []; runExitX = 0; runStartX = 0;
   mini = null; miniSpawned = false; alienRage = 0;
+  // 关卡道具统一换算成绝对坐标（dy = 离地高度）
+  const absPow = list => list.map(o => ({...o, y: groundYAt(o.x) - (o.dy || 96), taken:false, bob:0}));
+  const absMed = list => list.map(o => ({...o, y: groundYAt(o.x) - (o.dy || 84), taken:false, bob:0}));
   if(n === 1){
     LEVEL_W = L1_W; terrainPieces = L1_TERRAIN; platforms = L1_PLATFORMS;
     checkpoints = L1_CHECKPOINTS; triggers = L1_TRIGGERS; conveyors = L1_CONVEYORS;
     powerups = L1_POWERUPS.map(o => ({...o, taken:false, bob:0}));
     medals   = L1_MEDALS.map(o => ({...o, taken:false, bob:0}));
     crates   = buildCrates(L1_CRATES_X);
+    miniArena = null;
   } else if(n === 4){
     // 第四关：外星巢穴——砸穿的地板下面，是一整艘生物机械母舰
     LEVEL_W = L4_W; terrainPieces = L4_TERRAIN; checkpoints = L4_CHECKPOINTS;
@@ -577,6 +768,23 @@ function loadLevel(n){
     powerups = L4_POWERUPS.map(o => ({...o, taken:false, bob:0}));
     medals   = L4_MEDALS.map(o => ({...o, taken:false, bob:0}));
     crates   = buildCrates(L4_CRATES_X).concat(buildPackages(L4_PACKAGES_X));
+    miniArena = {l:4680, r:5900, x:5240, name:"外星督军 · 孵化厅守卫", hp:170, tone:"alien"};
+  } else if(n === 5 || n === 6 || n === 7 || n === 8){
+    // 第五~八关：全球各地的隐藏母舰（数据由生成器铺开）
+    const P = {
+      5:{W:L5_W,T:L5_TERRAIN,PL:L5_PLATFORMS,CP:L5_CHECKPOINTS,TR:L5_TRIGGERS,PU:L5_POWERUPS,MD:L5_MEDALS,CR:L5_CRATES_X,PK:L5_PACKAGES_X,A:L5_ARENA},
+      6:{W:L6_W,T:L6_TERRAIN,PL:L6_PLATFORMS,CP:L6_CHECKPOINTS,TR:L6_TRIGGERS,PU:L6_POWERUPS,MD:L6_MEDALS,CR:L6_CRATES_X,PK:L6_PACKAGES_X,A:L6_ARENA},
+      7:{W:L7_W,T:L7_TERRAIN,PL:L7_PLATFORMS,CP:L7_CHECKPOINTS,TR:L7_TRIGGERS,PU:L7_POWERUPS,MD:L7_MEDALS,CR:L7_CRATES_X,PK:L7_PACKAGES_X,A:L7_ARENA},
+      8:{W:L8_W,T:L8_TERRAIN,PL:L8_PLATFORMS,CP:L8_CHECKPOINTS,TR:L8_TRIGGERS,PU:L8_POWERUPS,MD:L8_MEDALS,CR:L8_CRATES_X,PK:L8_PACKAGES_X,A:L8_ARENA},
+    }[n];
+    LEVEL_W = P.W; terrainPieces = P.T; checkpoints = P.CP; conveyors = [];
+    platforms = P.PL.map(pl => ({...pl}));
+    triggers  = P.TR;
+    powerups = absPow(P.PU);
+    medals   = absMed(P.MD);
+    crates   = buildCrates(P.CR).concat(buildPackages(P.PK));
+    miniArena = {...P.A};
+    MINI_ARENA_L = miniArena.l; MINI_ARENA_R = miniArena.r;
   } else if(n === 3){
     // 第三关：反向逃生——沿用厂房结构，但断电停产、地板会被碎片砸穿
     LEVEL_W = L2_W; terrainPieces = L2_TERRAIN; checkpoints = L2_CHECKPOINTS;
@@ -649,13 +857,33 @@ function makeBoss(idx){
     const wx = L4_W - 420;
     boss = {
       kind:"alien", wallX: wx, active:false, dead:false, t:0,
-      core: {x:wx + 96, y:170, w:120, h:150, hp:70, maxHp:70, dead:false, shielded:true, phase:1},
+      core: {x:wx + 96, y:170, w:120, h:150, hp:150, maxHp:150, dead:false, shielded:true, phase:1},
       cannons:[
-        {x:wx - 40, y:130, w:50, h:50, hp:14, maxHp:14, dead:false, t:40,  eye:0, warnT:0, beamT:0},
-        {x:wx - 70, y:245, w:50, h:50, hp:14, maxHp:14, dead:false, t:110, eye:1, warnT:0, beamT:0},
-        {x:wx - 26, y:350, w:50, h:50, hp:14, maxHp:14, dead:false, t:180, eye:2, warnT:0, beamT:0},
+        {x:wx - 40, y:130, w:50, h:50, hp:26, maxHp:26, dead:false, t:40,  eye:0, warnT:0, beamT:0},
+        {x:wx - 70, y:245, w:50, h:50, hp:26, maxHp:26, dead:false, t:110, eye:1, warnT:0, beamT:0},
+        {x:wx - 26, y:350, w:50, h:50, hp:26, maxHp:26, dead:false, t:180, eye:2, warnT:0, beamT:0},
       ],
       tentacles: [], spawnT: 0, roarT: 0,
+    };
+  } else if(idx >= 5){
+    // 第五~八关：母舰核心（节点荚 + 中央核心 + 主题专属杀招）
+    const cfg = CARRIER_CFG[idx];
+    const wx = LEVEL_W - 420;
+    const n = cfg.nodes, top = 92, bot = 396;
+    const nodes = [];
+    for(let i=0;i<n;i++){
+      const t = i / (n - 1);
+      const y = Math.round(top + (bot - top)*t);
+      const x = wx - 48 - (i % 2 ? 28 : 0);
+      nodes.push({x, y, w:48, h:48, hp:cfg.nodeHp, maxHp:cfg.nodeHp, dead:false,
+                  t: 24 + i*34, warnT:0, burst:0, bt:0, gunA:Math.PI, idx:i});
+    }
+    boss = {
+      kind:"carrier", level:idx, tint:cfg.tint, special:cfg.special, name:cfg.name,
+      wallX: wx, active:false, dead:false, t:0, phase:1,
+      core: {x:wx + 88, y:158, w:124, h:168, hp:cfg.coreHp,
+             maxHp:cfg.coreHp, dead:false, shielded:true},
+      cannons: nodes, specials: [], spT: 0, spawnT: 0, hitFlash: 0,
     };
   } else {
     const wx = L2_W - 240;                            // 9160
@@ -681,22 +909,22 @@ function beamHitsPlayer(c){
   const proj = px*dx + py*dy;
   if(proj < 0) return false;
   const perp = Math.abs(px*(-dy) + py*dx);
-  return perp < 15;                       // 光束半宽
+  return perp < (c.beamW || 15);           // 光束半宽
 }
 function updateAlienBoss(b, p){
   const core = b.core;
   core.shielded = b.cannons.some(c => !c.dead);
-  const phase2 = core.hp <= core.maxHp * 0.5;
+  const phase2 = core.hp <= core.maxHp * 0.55;
   core.phase = phase2 ? 2 : 1;
 
-  // ---- 三只眼：锁定 → 预警线 34 帧 → 光束 18 帧 ----
+  // ---- 三只眼：锁定 → 预警线 30 帧 → 光束 20 帧 ----
   for(const c of b.cannons){
     if(c.dead) continue;
     c.t++;
     const cx = c.x + c.w/2, cy = c.y + c.h/2;
-    const period = phase2 ? 148 : 208;
+    const period = phase2 ? 124 : 176;
     if(c.warnT <= 0 && c.beamT <= 0 && (c.t % period === 0) && !p.dead){
-      c.warnT = 34;
+      c.warnT = 30; c.beamW = phase2 ? 20 : 17;
       c.lockX = p.x + p.w/2; c.lockY = p.y + p.h*0.55;
       c.gunA = Math.atan2(c.lockY - cy, c.lockX - cx);
       sfx(900,.16,"sine",.05,-320);
@@ -704,8 +932,8 @@ function updateAlienBoss(b, p){
     if(c.warnT > 0){
       c.warnT--;
       if(c.warnT === 0){
-        c.beamT = 18; c.beamHit = false;
-        shake = Math.max(shake, 7);
+        c.beamT = 20; c.beamHit = false;
+        shake = Math.max(shake, 8);
         sfx(1500,.22,"sawtooth",.09,-700);
       }
     }
@@ -716,21 +944,21 @@ function updateAlienBoss(b, p){
     if(aabb(hitbox(), c) && p.inv <= 0) hurtPlayer();
   }
 
-  // ---- 核心：环形弹幕（护盾期 8 / 破盾 10 / 二阶段 14）----
+  // ---- 核心：环形弹幕（护盾期 10 / 破盾 12 / 二阶段 16）----
   if(!core.dead){
-    const n = core.shielded ? 8 : (phase2 ? 14 : 10);
-    if(b.t % (phase2 ? 200 : 300) === 40){
+    const n = core.shielded ? 10 : (phase2 ? 16 : 12);
+    if(b.t % (phase2 ? 170 : 240) === 40){
       for(let k=0;k<n;k++){
         const ang = b.t*0.04 + k*Math.PI*2/n;
         ebullets.push({x:core.x+core.w/2, y:core.y+core.h/2, w:9, h:9, r:5,
-                       vx:Math.cos(ang)*3.8, vy:Math.sin(ang)*3.8, life:240, alien:true});
+                       vx:Math.cos(ang)*3.9, vy:Math.sin(ang)*3.9, life:240, alien:true});
       }
       S.shoot();
     }
     // 触须拍地：玩家脚下先出现预警圈，再弹出地刺
-    if(!core.shielded && b.t % 240 === 100 && b.tentacles.length < 3){
-      const tx = Math.max(b.wallX - 920, Math.min(b.wallX - 40, p.x + p.w/2));
-      b.tentacles.push({x:tx, t:0, warn:44, up:0, hit:false});
+    if(!core.shielded && b.t % (phase2 ? 150 : 190) === 100 && b.tentacles.length < 4){
+      const tx = Math.max(b.wallX - 960, Math.min(b.wallX - 40, p.x + p.w/2));
+      b.tentacles.push({x:tx, t:0, warn:40, up:0, hit:false});
       sfx(120,.4,"square",.10,-40);
     }
     if(aabb(hitbox(), core) && p.inv <= 0) hurtPlayer();
@@ -751,12 +979,203 @@ function updateAlienBoss(b, p){
 
   // ---- 召唤爪兵 ----
   b.spawnT++;
-  if(!core.dead && b.spawnT > (phase2 ? 300 : 440)){
+  if(!core.dead && b.spawnT > (phase2 ? 240 : 360)){
     b.spawnT = 0;
-    for(let k=0;k<(phase2 ? 2 : 1);k++){
+    for(let k=0;k<(phase2 ? 3 : 2);k++){
       const sx = b.wallX - 280 - k*130;
       const gy = groundYAt(sx);
-      enemies.push(makeAlien(sx, gy < Infinity ? gy : GROUND_Y, "claw"));
+      enemies.push(makeAlien(sx, gy < Infinity ? gy : GROUND_Y, k === 1 ? "spit" : "claw"));
+    }
+    sfx(90,.5,"sawtooth",.10,-60);
+  }
+}
+
+// ============ 第五~八关 Boss：母舰核心（节点荚 + 主题杀招） ============
+function spawnCarrierSpecial(b, p){
+  const px = p.x + p.w/2;
+  const clampX = (x, pad=60) => Math.max(b.wallX - 1020, Math.min(b.wallX - pad, x));
+  if(b.special === "bolt"){
+    // 深海：电浆柱从舱顶贯穿到地面
+    b.specials.push({type:"bolt", x: clampX(px), t:0, warn:44, beam:0, hit:false});
+    sfx(240,.42,"sine",.09,-60);
+  } else if(b.special === "spike"){
+    // 沙海：地刺沿地面连续刺出
+    for(let k=0;k<3;k++){
+      b.specials.push({type:"spike", x: clampX(px + (k-1)*140), t:0, warn:32 + k*9,
+                       up:0, hit:false, hold:0});
+    }
+    sfx(110,.42,"square",.11,-50);
+  } else if(b.special === "icefall"){
+    // 冰盖：冰锥雨（多点落冰）
+    for(let k=0;k<5;k++){
+      b.specials.push({type:"ice", x: clampX(px + (k-2)*120 + (Math.random()-0.5)*70),
+                       y:-40, vy:0, t:0, warn:24 + k*6, hit:false, dead:false});
+    }
+    sfx(980,.3,"sine",.07,-220);
+  } else {
+    // 轨道：核心主炮横向贯穿扫射
+    b.specials.push({type:"rail", t:0, warn:56, fire:0, y0:chestY(), y1:chestY(), hit:false});
+    sfx(70,.8,"sawtooth",.13,-30);
+  }
+}
+function updateCarrierSpecials(b, p){
+  const core = b.core;
+  const cy0 = core.y + core.h/2;
+  for(const s of b.specials){
+    s.t++;
+    if(s.type === "bolt"){
+      if(s.warn > 0){
+        s.warn--;
+        if(s.warn === 0){
+          s.beam = 22; shake = Math.max(shake, 11);
+          sfx(1300,.34,"sawtooth",.13,-600);
+        }
+        if(s.t % 2 === 0) particles.push({x:s.x + (Math.random()-0.5)*44, y:80 + Math.random()*300,
+          vx:(Math.random()-0.5)*2, vy:-1-Math.random()*2, life:14, color:"#8fe6ff"});
+        continue;
+      }
+      if(s.beam > 0){
+        s.beam--;
+        if(!s.hit && !p.dead && p.inv <= 0){
+          const gy = groundYAt(s.x);
+          const box = {x:s.x-22, y:(gy < Infinity ? gy : GROUND_Y) - 460, w:44, h:460};
+          if(aabb(hitbox(), box)){ s.hit = true; hurtPlayer(); }
+        }
+        for(let k=0;k<2;k++) particles.push({x:s.x + (Math.random()-0.5)*30, y:Math.random()*H,
+          vx:(Math.random()-0.5)*2.4, vy:(Math.random()-0.5)*2, life:12, color:"#d8faff"});
+        if(s.beam === 0) s.done = true;
+      }
+    } else if(s.type === "spike"){
+      if(s.warn > 0){
+        s.warn--;
+        continue;
+      }
+      if(s.up < 1) s.up = Math.min(1, s.up + 0.22);
+      else s.hold++;
+      const gy = groundYAt(s.x);
+      const h = 100*s.up;
+      if(s.up >= 0.7 && !s.hit && !p.dead && p.inv <= 0 &&
+         aabb(hitbox(), {x:s.x-17, y:(gy < Infinity ? gy : GROUND_Y)-h, w:34, h})){
+        s.hit = true; hurtPlayer();
+      }
+      if(s.hold > 30) s.done = true;
+    } else if(s.type === "ice"){
+      if(s.warn > 0){
+        s.warn--;
+        if(s.warn === 0){ s.vy = 5; sfx(700,.18,"sine",.06,-160); }
+        continue;
+      }
+      if(!s.hit){
+        s.vy += 0.55; s.y += s.vy;
+        const gy = groundYAt(s.x);
+        const floor = (gy < Infinity ? gy : GROUND_Y);
+        if(!p.dead && p.inv <= 0 && aabb(hitbox(), {x:s.x-18, y:s.y-20, w:36, h:46})){
+          s.hit = true; hurtPlayer();
+        }
+        if(s.y + 24 >= floor || s.y > H + 80){
+          s.hit = true;
+          explode(s.x, floor, "#bfe9ff", 16, 4.5);
+          shake = Math.max(shake, 5);
+          if(!p.dead && p.inv <= 0 && Math.abs((p.x+p.w/2)-s.x) < 54 && p.y+p.h > floor-40) hurtPlayer();
+          s.dead = true;
+        }
+      }
+      if(s.hit) s.dead = true;
+    } else if(s.type === "rail"){
+      if(s.warn > 0){
+        s.warn--;
+        s.y1 = chestY();
+        if(s.warn === 0){
+          s.fire = 84; s.y0 = s.y1; shake = Math.max(shake, 14);
+          sfx(60,.9,"sawtooth",.16,-20);
+        }
+        if(s.t % 3 === 0) particles.push({x:core.x - 20 + (Math.random()-0.5)*30,
+          y:cy0 + (Math.random()-0.5)*60, vx:-3-Math.random()*3, vy:(Math.random()-0.5)*2,
+          life:14, color:"#ff9be0"});
+        continue;
+      }
+      if(s.fire > 0){
+        s.fire--;
+        const k = 1 - s.fire/84;
+        const y = s.y0 + (s.y1 - s.y0)*Math.min(1, k*1.35);
+        if(!p.dead && p.inv <= 0 && Math.abs((p.y + p.h*0.5) - y) < 26 &&
+           p.x + p.w/2 < core.x){
+          hurtPlayer();
+        }
+        for(let i=0;i<3;i++) particles.push({x:core.x - Math.random()*W, y:y + (Math.random()-0.5)*20,
+          vx:-8-Math.random()*6, vy:(Math.random()-0.5)*1.4, life:10, color:"#ffd6f4"});
+        if(s.fire === 0) s.done = true;
+      }
+    }
+  }
+  b.specials = b.specials.filter(s => !s.done);
+}
+function updateCarrierBoss(b, p){
+  const core = b.core;
+  core.shielded = b.cannons.some(c => !c.dead);
+  const phase = core.hp <= core.maxHp * 0.55 ? 2 : 1;
+  b.phase = phase;
+
+  // ---- 节点荚：预警 26 帧 → 三连追踪弹 ----
+  for(const c of b.cannons){
+    if(c.dead) continue;
+    c.t++;
+    const cx = c.x + c.w/2, cy = c.y + c.h/2;
+    const period = Math.max(96, (phase === 2 ? 116 : 152) - b.level*3);
+    if(c.warnT <= 0 && c.burst <= 0 && c.t % period === 0 && !p.dead &&
+       Math.abs((p.x + p.w/2) - cx) < 980){
+      c.warnT = 26;
+      c.gunA = Math.atan2(chestY() - cy, (p.x + p.w/2) - cx);
+      sfx(780,.14,"sine",.045,-260);
+    }
+    if(c.warnT > 0){
+      c.warnT--;
+      if(c.warnT === 0){ c.burst = 3; c.bt = 0; c.flash = 6; }
+    }
+    if(c.burst > 0){
+      c.bt++;
+      if(c.bt % 8 === 1){
+        const ang = c.gunA + (Math.random()-0.5)*0.07;
+        ebullets.push({x:cx, y:cy, w:9, h:9, r:5,
+                       vx:Math.cos(ang)*5.0, vy:Math.sin(ang)*5.0, life:210, alien:true});
+        c.burst--;
+      }
+    }
+    if(aabb(hitbox(), c) && p.inv <= 0) hurtPlayer();
+  }
+
+  // ---- 核心环形弹幕 ----
+  if(!core.dead){
+    const n = core.shielded ? 10 : (phase === 2 ? 16 : 12);
+    const period = phase === 2 ? 176 : (core.shielded ? 250 : 214);
+    if(b.t % period === 36){
+      for(let k=0;k<n;k++){
+        const ang = b.t*0.035 + k*Math.PI*2/n;
+        ebullets.push({x:core.x+core.w/2, y:core.y+core.h/2, w:9, h:9, r:5,
+                       vx:Math.cos(ang)*3.9, vy:Math.sin(ang)*3.9, life:250, alien:true});
+      }
+      S.shoot();
+    }
+    if(aabb(hitbox(), core) && p.inv <= 0) hurtPlayer();
+  }
+
+  // ---- 主题杀招 ----
+  b.spT++;
+  const spPeriod = phase === 2 ? 200 : 286;
+  if(!core.dead && b.spT % spPeriod === 96 && b.specials.length < 3){
+    spawnCarrierSpecial(b, p);
+  }
+  updateCarrierSpecials(b, p);
+
+  // ---- 召唤守军 ----
+  b.spawnT++;
+  if(!core.dead && b.spawnT > (phase === 2 ? 250 : 370)){
+    b.spawnT = 0;
+    const cnt = phase === 2 ? 3 : 2;
+    for(let k=0;k<cnt;k++){
+      const sx = b.wallX - 260 - k*140;
+      const gy = groundYAt(sx);
+      enemies.push(makeAlien(sx, gy < Infinity ? gy : GROUND_Y, k === 1 ? "spit" : "claw"));
     }
     sfx(90,.5,"sawtooth",.10,-60);
   }
@@ -1324,17 +1743,32 @@ function updateReveal(){
   debris = debris.filter(d => !d.dead);
   if(stateTimer > 300) startAlienLair();
 }
-function startAlienLair(){
+function startAlienLair(){ advanceTo(4); }
+// 通用：进入第 n 关（枪与等级一路带着）
+function advanceTo(n){
   bullets=[]; ebullets=[]; enemies=[]; particles=[]; ironBalls=[]; debris=[]; redPools=[];
   holes=[]; fleeSquad=[]; liquid=null; finalRun=false; debrisT=0;
   cam=0; checkpoint=0; usedTriggers=new Set(); autoSpawnT=0; shake=0;
-  loadLevel(4);
-  makeBoss(4);
-  lives = Math.max(lives, 1) + 2;                 // 进外星巢穴补两条命
+  loadLevel(n);
+  makeBoss(n);
+  lives = Math.max(lives, 1) + 2;                 // 每进一艘母舰补两条命
   resetPlayer(60, true);                          // 枪和等级继续带着
   player.inv = 140;
   state="play"; stateTimer=0; bannerT=230;
   BGM.start();
+}
+// 关卡之间的剧情过场：先给一段字幕，再进下一艘母舰
+let nextStageIdx = 5;
+function startStageBreak(next){
+  nextStageIdx = next;
+  bullets=[]; ebullets=[]; enemies=[]; particles=[]; ironBalls=[]; debris=[]; redPools=[];
+  holes=[]; fleeSquad=[]; liquid=null; finalRun=false; boss=null;
+  state="stagebreak"; stateTimer=0; shake=0;
+  BGM.stop(); S.clear();
+}
+function updateStageBreak(){
+  stateTimer++;
+  if(stateTimer > 330 || keys["Enter"]) advanceTo(nextStageIdx);
 }
 // ---------- 工具 ----------
 const aabb = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
@@ -1385,6 +1819,7 @@ function update(){
   if(state==="aftermath"){ updateAftermath(); return; }
   if(state==="escape"){ updateEscape(); return; }
   if(state==="reveal"){ updateReveal(); return; }
+  if(state==="stagebreak"){ updateStageBreak(); return; }
   if(state!=="play" && state!=="walkin"){ stateTimer++; if(shake>0)shake--; return; }
   // ----- 通关后自动走进要塞大门 -----
   if(state==="walkin"){
@@ -1970,13 +2405,13 @@ function update(){
   // 小 Boss 是锁场战斗的主角，不能因为镜头还没跟上就被当成"出界"清掉
   enemies = enemies.filter(e => !e.dead && (e.kind === "mini" || (e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80)));
 
-  // ----- 第四关：孵化厅小 Boss（锁场、死亡结算）-----
-  if(LEVEL_IDX === 4 && state === "play"){
-    if(!miniSpawned && p.x > MINI_ARENA_L + 60) spawnMini();
+  // ----- 第四~八关：母舰中段的小 Boss（锁场、死亡结算）-----
+  if(miniArena && state === "play"){
+    if(!miniSpawned && p.x > miniArena.l + 60 && p.x < miniArena.r) spawnMini();
     if(mini){
       if(!mini.dead){
-        // 孵化厅闸门落下：这一小段必须打赢才能继续往前走
-        p.x = Math.max(MINI_ARENA_L, Math.min(p.x, MINI_ARENA_R - p.w));
+        // 闸门落下：这一小段必须打赢才能继续往前走
+        p.x = Math.max(miniArena.l, Math.min(p.x, miniArena.r - p.w));
       } else if(!mini.rewarded){
         mini.rewarded = true;
         lives++; score += 2000;
@@ -1999,6 +2434,8 @@ function update(){
       cam = Math.min(cam+6, LEVEL_W - W);
       if(b.kind === "alien"){
         updateAlienBoss(b, p);
+      } else if(b.kind === "carrier"){
+        updateCarrierBoss(b, p);
       } else if(b.kind === "reactor"){
         // 第二关：反应堆核心（上下两座旋转炮舱 + 护盾核心）
         b.core.shielded = b.cannons.some(c => !c.dead);
@@ -2596,14 +3033,24 @@ function killCore(){
   if(LEVEL_IDX === 2 && !finalRun){
     // 第二关：爆炸过后进入"不对劲"的过场（接着反应堆渗液 → 第三关逃命）
     setTimeout(()=>{ if(state === "play") startAftermath(); }, 1600);
-  } else if(LEVEL_IDX === 4){
-    // 第四关：外星主脑被击穿 → 母舰失控崩解 → 结局
+  } else if(LEVEL_IDX >= 4 && LEVEL_IDX < 8){
+    // 第四~七关：击穿这一艘 → 顺着坐标去找下一艘（过场字幕 → 下一关）
+    const next = LEVEL_IDX + 1, from = LEVEL_IDX;
     setTimeout(()=>{
-      if(state !== "play") return;
+      if(state !== "play" || LEVEL_IDX !== from) return;
+      shake = 22;
+      explode(core.x+core.w/2, core.y+core.h/2, "#7dfce8", 44, 8);
+      explode(core.x+core.w/2, core.y+core.h/2, "#ff4f8b", 32, 6);
+      startStageBreak(next);
+    }, 1900);
+  } else if(LEVEL_IDX === 8){
+    // 第八关：轨道母巢被击穿 → 真正的结局
+    setTimeout(()=>{
+      if(state !== "play" || LEVEL_IDX !== 8) return;
       state = "win"; stateTimer = 0; BGM.stop(); S.clear();
-      shake = 26;
-      explode(core.x+core.w/2, core.y+core.h/2, "#7dfce8", 50, 9);
-      explode(core.x+core.w/2, core.y+core.h/2, "#ff4f8b", 40, 7);
+      shake = 30;
+      explode(core.x+core.w/2, core.y+core.h/2, "#ff7ad0", 60, 10);
+      explode(core.x+core.w/2, core.y+core.h/2, "#7dfce8", 44, 8);
     }, 1900);
   } else {
     setTimeout(()=>{ state="walkin"; stateTimer=0; }, 1600); // 爆炸过后主角自动走向大门
@@ -2749,8 +3196,212 @@ function drawBGAlien(){
   g.addColorStop(0, "rgba(255,79,139,.18)"); g.addColorStop(1, "rgba(255,79,139,0)");
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(gx, 210, 300, 0, 6.283); ctx.fill();
 }
+// ============ 第五关：深海（马里亚纳海沟里的母舰）============
+function drawBGSea(){
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#021019"); bg.addColorStop(.42,"#052434"); bg.addColorStop(1,"#0a3b4c");
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  // 水面透下来的光柱
+  ctx.save();
+  for(let i=0;i<5;i++){
+    const bx = ((i*300 - cam*0.12) % 1500 + 1500) % 1500 - 200;
+    ctx.globalAlpha = .05 + .03*Math.sin(perfNow*0.0007 + i);
+    ctx.fillStyle = "#9fe8ff";
+    ctx.beginPath();
+    ctx.moveTo(bx, 0); ctx.lineTo(bx+70, 0); ctx.lineTo(bx+190, H); ctx.lineTo(bx-40, H);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  // 远景海沟壁（视差 0.16）
+  ctx.fillStyle = "#03202b";
+  for(let i=-1;i<8;i++){
+    const bx = ((i*340 - cam*0.16) % 2720 + 2720) % 2720 - 220;
+    ctx.beginPath();
+    ctx.moveTo(bx, 0); ctx.lineTo(bx+120, 150 + (i%3)*40); ctx.lineTo(bx+70, 420);
+    ctx.lineTo(bx+180, 470); ctx.lineTo(bx+40, 500); ctx.lineTo(bx, 300);
+    ctx.closePath(); ctx.fill();
+  }
+  // 中景：沉在海底的巨型舰体肋骨（视差 0.4）
+  for(let i=-1;i<6;i++){
+    const bx = ((i*470 - cam*0.4) % 2820 + 2820) % 2820 - 260;
+    ctx.strokeStyle = "#0a3444"; ctx.lineWidth = 22;
+    ctx.beginPath(); ctx.arc(bx, 520, 300, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+    ctx.strokeStyle = "rgba(92,216,255,.13)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bx, 520, 300, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+  }
+  // 上升气泡（视差 0.7）
+  for(let i=0;i<34;i++){
+    const px = ((i*151 - cam*0.7) % 1300 + 1300) % 1300 - 100;
+    const py = H - ((i*83 + perfNow*0.035*(1+(i%3)*0.5)) % (H+120));
+    ctx.globalAlpha = .12 + .2*Math.abs(Math.sin(perfNow*0.002 + i));
+    ctx.fillStyle = "#bff2ff";
+    ctx.beginPath(); ctx.arc(px + Math.sin(py*0.02+i)*6, py, 1.5 + (i%4)*0.75, 0, 6.283); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // 海底生物荧光
+  const g = ctx.createRadialGradient(W*0.25 - cam*0.05, 430, 8, W*0.25 - cam*0.05, 430, 280);
+  g.addColorStop(0,"rgba(92,216,255,.14)"); g.addColorStop(1,"rgba(92,216,255,0)");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(W*0.25 - cam*0.05, 430, 280, 0, 6.283); ctx.fill();
+}
+// ============ 第六关：沙海（撒哈拉沙下的母舰）============
+function drawBGSand(){
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#2a1a08"); bg.addColorStop(.48,"#5c3d16"); bg.addColorStop(1,"#8a6326");
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  // 沙尘暴里的太阳
+  const sx = W*0.72 - cam*0.03, sy = 110;
+  const sg = ctx.createRadialGradient(sx, sy, 10, sx, sy, 120);
+  sg.addColorStop(0,"rgba(255,225,150,.55)"); sg.addColorStop(1,"rgba(255,200,92,0)");
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, 120, 0, 6.283); ctx.fill();
+  // 埋在沙里的金字塔母舰（视差 0.2）
+  for(let i=-1;i<5;i++){
+    const bx = ((i*620 - cam*0.2) % 3100 + 3100) % 3100 - 320;
+    ctx.fillStyle = "#3a2611";
+    ctx.beginPath(); ctx.moveTo(bx-200, 440); ctx.lineTo(bx+40, 170); ctx.lineTo(bx+290, 440); ctx.closePath(); ctx.fill();
+    // 塔身的发光接缝
+    ctx.strokeStyle = "rgba(255,200,92,.28)"; ctx.lineWidth = 2;
+    for(let k=1;k<4;k++){
+      const t = k/4;
+      ctx.beginPath();
+      ctx.moveTo(bx+40-(240*t), 440-(270*t));
+      ctx.lineTo(bx+40+(250*t), 440-(270*t));
+      ctx.stroke();
+    }
+    ctx.fillStyle = "rgba(255,200,92,.5)";
+    ctx.fillRect(bx+32, 170, 14, 6);
+  }
+  // 三层沙丘（视差递增）
+  const dunes = [[0.28,"#4a3216",470,70],[0.46,"#5c401c",500,54],[0.66,"#3d2a12",525,44]];
+  for(const [par, col, base, amp] of dunes){
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(0, H);
+    for(let x=0;x<=W;x+=20){
+      const wx = x + cam*par;
+      ctx.lineTo(x, base + Math.sin(wx*0.0032)*amp + Math.sin(wx*0.0011+1)*amp*0.6);
+    }
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  }
+  // 横飞的风沙
+  for(let i=0;i<40;i++){
+    const px = ((i*97 - cam*0.75 - perfNow*0.06*(1+(i%3)*0.4)) % 1200 + 1200) % 1200 - 80;
+    const py = 120 + ((i*67) % 300);
+    ctx.globalAlpha = .10 + .18*Math.abs(Math.sin(i + perfNow*0.001));
+    ctx.fillStyle = "#ffdba0";
+    ctx.fillRect(px, py, 10 + (i%4)*4, 1.6);
+  }
+  ctx.globalAlpha = 1;
+}
+// ============ 第七关：冰盖（北极冰下的母舰）============
+function drawBGIce(){
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#03101c"); bg.addColorStop(.46,"#0a2636"); bg.addColorStop(1,"#164152");
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  // 星点
+  for(let i=0;i<40;i++){
+    const px = ((i*173 - cam*0.05) % 1200 + 1200) % 1200 - 60;
+    const py = 20 + (i*47) % 210;
+    ctx.globalAlpha = .25 + .45*Math.abs(Math.sin(perfNow*0.001 + i));
+    ctx.fillStyle = "#dff7ff"; ctx.fillRect(px, py, 1.6, 1.6);
+  }
+  ctx.globalAlpha = 1;
+  // 极光带
+  for(let band=0;band<3;band++){
+    ctx.beginPath();
+    for(let x=-40;x<=W+40;x+=16){
+      const wx = x + cam*0.06 + band*120;
+      const y = 90 + band*44 + Math.sin(wx*0.004 + perfNow*0.0009 + band)*30
+                        + Math.sin(wx*0.0017 - perfNow*0.0006)*18;
+      if(x === -40) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = ["rgba(120,255,214,.24)","rgba(120,200,255,.18)","rgba(190,140,255,.14)"][band];
+    ctx.lineWidth = 26 - band*6;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+  // 远处冰崖（视差 0.2）
+  ctx.fillStyle = "#0c2c3c";
+  for(let i=-1;i<7;i++){
+    const bx = ((i*360 - cam*0.2) % 2520 + 2520) % 2520 - 240;
+    ctx.beginPath();
+    ctx.moveTo(bx, 460); ctx.lineTo(bx+60, 300 + (i%3)*36); ctx.lineTo(bx+130, 250);
+    ctx.lineTo(bx+210, 330); ctx.lineTo(bx+280, 460); ctx.closePath(); ctx.fill();
+  }
+  // 冰柱（视差 0.45，挂着的水晶）
+  for(let i=-1;i<14;i++){
+    const bx = ((i*180 - cam*0.45) % 2340 + 2340) % 2340 - 160;
+    const top = 0, len = 60 + (i*53)%90;
+    ctx.fillStyle = "rgba(159,232,255,.16)";
+    ctx.beginPath(); ctx.moveTo(bx, top); ctx.lineTo(bx+16, top); ctx.lineTo(bx+7, top+len); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(230,250,255,.35)"; ctx.lineWidth = 1.4; ctx.stroke();
+  }
+  // 飘雪
+  for(let i=0;i<50;i++){
+    const px = ((i*131 - cam*0.6 + Math.sin(perfNow*0.001 + i)*22) % 1200 + 1200) % 1200 - 80;
+    const py = ((i*77 + perfNow*0.02*(1+(i%3)*0.5)) % H);
+    ctx.globalAlpha = .2 + .4*Math.abs(Math.sin(i + perfNow*0.0012));
+    ctx.fillStyle = "#eafaff";
+    ctx.beginPath(); ctx.arc(px, py, 1.4 + (i%3)*0.6, 0, 6.283); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+// ============ 第八关：近地轨道（母巢旗舰）============
+function drawBGSpace(){
+  ctx.fillStyle = "#03030a"; ctx.fillRect(0,0,W,H);
+  // 星云
+  const n1 = ctx.createRadialGradient(W*0.72 - cam*0.02, 150, 20, W*0.72 - cam*0.02, 150, 420);
+  n1.addColorStop(0,"rgba(255,80,180,.16)"); n1.addColorStop(1,"rgba(120,40,180,0)");
+  ctx.fillStyle = n1; ctx.beginPath(); ctx.arc(W*0.72 - cam*0.02, 150, 420, 0, 6.283); ctx.fill();
+  // 三层星野（视差不同）
+  const layers = [[0.05, "#ffffff", 1.4, 70],[0.14, "#cfe4ff", 2.0, 44],[0.26, "#ffd9f4", 2.6, 26]];
+  for(const [par, col, sz, cnt] of layers){
+    ctx.fillStyle = col;
+    for(let i=0;i<cnt;i++){
+      const px = ((i*211 - cam*par) % 1300 + 1300) % 1300 - 100;
+      const py = 14 + (i*137) % 380;
+      const tw = 0.35 + 0.6*Math.abs(Math.sin(perfNow*0.0015 + i*1.7));
+      ctx.globalAlpha = tw;
+      ctx.fillRect(px, py, sz, sz);
+    }
+  }
+  ctx.globalAlpha = 1;
+  // 地球弧线（左下，视差 0.03）
+  const ex = W*0.16 - cam*0.02, ey = H + 250;
+  const eg = ctx.createLinearGradient(0, ey-320, 0, ey+120);
+  eg.addColorStop(0,"#4aa8d8"); eg.addColorStop(.5,"#1b5f8a"); eg.addColorStop(1,"#0a2a44");
+  ctx.fillStyle = eg;
+  ctx.beginPath(); ctx.arc(ex, ey, 360, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = "rgba(160,230,255,.5)"; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(ex, ey, 356, Math.PI*1.05, Math.PI*1.95); ctx.stroke();
+  // 云带
+  ctx.globalAlpha = .18; ctx.fillStyle = "#ffffff";
+  for(let i=0;i<4;i++){
+    ctx.beginPath();
+    ctx.ellipse(ex - 120 + i*80, ey - 300 + i*18, 90, 12, 0.3, 0, 6.283);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // 远处母巢轮廓（视差 0.3，右侧）：巨大环形舰体
+  const mx = W*0.86 - cam*0.3;
+  ctx.strokeStyle = "#2a1838"; ctx.lineWidth = 40;
+  ctx.beginPath(); ctx.arc(mx, 230, 190, 0, 6.283); ctx.stroke();
+  ctx.strokeStyle = "rgba(255,122,208,.20)"; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.arc(mx, 230, 190, 0, 6.283); ctx.stroke();
+  // 星尘流
+  for(let i=0;i<28;i++){
+    const px = ((i*149 - cam*0.5 - perfNow*0.03*(1+(i%3)*0.3)) % 1300 + 1300) % 1300 - 100;
+    const py = 60 + (i*71) % 340;
+    ctx.globalAlpha = .12 + .2*Math.abs(Math.sin(i + perfNow*0.001));
+    ctx.fillStyle = "#9fd8ff";
+    ctx.fillRect(px, py, 12 + (i%3)*6, 1.2);
+  }
+  ctx.globalAlpha = 1;
+}
 function drawBG(){
   if(LEVEL_IDX === 4) return drawBGAlien();
+  if(LEVEL_IDX === 5) return drawBGSea();
+  if(LEVEL_IDX === 6) return drawBGSand();
+  if(LEVEL_IDX === 7) return drawBGIce();
+  if(LEVEL_IDX === 8) return drawBGSpace();
   if(LEVEL_IDX >= 2) return drawBG2();
   // 天空
   const sky = ctx.createLinearGradient(0,0,0,H);
@@ -2831,18 +3482,18 @@ function drawConveyors(){
   }
 }
 function drawTerrain2(){
-  // 第四关：整块地板换成母舰的生物装甲（紫黑 + 青色脉络），其余关卡保持厂房金属
-  const AL = LEVEL_IDX === 4;
-  const cDk0  = AL ? "#140c1e" : "#0d131a", cDk1 = AL ? "#05030a" : "#05080c";
-  const cFloor= AL ? "#2a2038" : "#242b34";
-  const cBeam = AL ? "#1d1728" : "#1b222b";
-  const cTop  = AL ? "#7a5aa8" : "#6d7b8c";
-  const cWarn = AL ? "#4a3568" : "#c8a02a";
-  const cRivet= AL ? "#8f7bb8" : "#8794a3";
-  const cEdge = AL ? "rgba(125,252,232,.5)" : "rgba(255,120,30,.5)";
-  const cPlatBody = AL ? "#33254a" : "#2f3843";
-  const cPlatTop  = AL ? "#8a68bd" : "#6d7b8c";
-  const cPlatBot  = AL ? "#1d1529" : "#1c232b";
+  // 第二~八关：同一种"金属/装甲地板"结构，配色由关卡主题决定
+  const P = themePal();
+  const cDk0 = P.dk0, cDk1 = P.dk1;
+  const cFloor = P.floor;
+  const cBeam = P.beam;
+  const cTop  = P.top;
+  const cWarn = P.warn;
+  const cRivet= P.rivet;
+  const cEdge = P.edge;
+  const cPlatBody = P.platBody;
+  const cPlatTop  = P.platTop;
+  const cPlatBot  = P.platBot;
 
   // 地面下方的机房暗层（有蒸汽与管线，不再是熔岩深坑）
   const dk = ctx.createLinearGradient(0,420,0,H);
@@ -2850,8 +3501,8 @@ function drawTerrain2(){
   ctx.fillStyle = dk; ctx.fillRect(0, 420, W, H-420);
   for(let i=0;i<10;i++){
     const bx = ((i*150 - cam*0.35) % 1500 + 1500) % 1500 - 100;
-    ctx.fillStyle = "#0f1720"; ctx.fillRect(bx, 505, 120, 10);
-    ctx.fillStyle = "#131d27"; ctx.fillRect(bx+16, 470, 8, 45);
+    ctx.fillStyle = P.beam; ctx.fillRect(bx, 505, 120, 10);
+    ctx.fillStyle = P.wall1; ctx.fillRect(bx+16, 470, 8, 45);
   }
   // 地板：金属平台（顶面高光 + 铆钉 + 承重梁）
   for(const pc of terrainPieces){
@@ -2914,12 +3565,12 @@ function drawTerrain2(){
     ctx.fillStyle=cPlatTop; ctx.fillRect(px, py, pl.w, 4);
     ctx.fillStyle=cPlatBot; ctx.fillRect(px, py+pl.h-4, pl.w, 4);
     // 格栅
-    ctx.strokeStyle="#202932"; ctx.lineWidth=2;
+    ctx.strokeStyle=P.beam; ctx.lineWidth=2;
     for(let gx=pl.x+8; gx<pl.x+pl.w-6; gx+=16){
       ctx.beginPath(); ctx.moveTo(gx-cam+shk, py+4); ctx.lineTo(gx-cam+shk, py+pl.h-4); ctx.stroke();
     }
     // 两端吊索
-    ctx.strokeStyle="#48545f"; ctx.lineWidth=2;
+    ctx.strokeStyle=P.top; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(px+6, py); ctx.lineTo(px+6, py-14);
     ctx.moveTo(px+pl.w-6, py); ctx.lineTo(px+pl.w-6, py-14); ctx.stroke();
     if(cracking){
@@ -3751,10 +4402,14 @@ function drawCam(e, x, y){
 // ---------- 第四关小 Boss：外星督军（孵化厅守卫） ----------
 function spawnMini(){
   miniSpawned = true;
-  const gy = groundYAt(MINI_ARENA_X + 52);
-  mini = {kind:"mini", x:MINI_ARENA_X, y:(gy < Infinity ? gy : GROUND_Y) - 96, w:104, h:96,
-          hp:90, maxHp:90, face:-1, t:0, st:"idle", stT:0, cd:100, flash:0,
-          dead:false, animT:0, vx:0, vy:0, warnT:0, chargeDir:-1, rewarded:false, grounded:true};
+  const A = miniArena || {x:MINI_ARENA_X, l:MINI_ARENA_L, r:MINI_ARENA_R,
+                          name:"外星督军 · 孵化厅守卫", hp:170, tone:"alien"};
+  const gy = groundYAt(A.x + 52);
+  mini = {kind:"mini", x:A.x, y:(gy < Infinity ? gy : GROUND_Y) - 96, w:104, h:96,
+          hp:A.hp, maxHp:A.hp, name:A.name, tone:A.tone || "alien",
+          face:-1, t:0, st:"idle", stT:0, cd:100, flash:0,
+          dead:false, animT:0, vx:0, vy:0, warnT:0, chargeDir:-1, rewarded:false, grounded:true,
+          rage:false};
   enemies.push(mini);
   shake = Math.max(shake, 14);
   sfx(60,.7,"sawtooth",.14,-50);
@@ -3762,9 +4417,15 @@ function spawnMini(){
 function updateMini(e, p){
   e.t++; if(e.flash > 0) e.flash--;
   e.animT += 0.12;
+  const A = miniArena || {l:MINI_ARENA_L, r:MINI_ARENA_R};
   const cx = e.x + e.w/2, px = p.x + p.w/2;
   const dx = px - cx, dist = Math.abs(dx);
   if(e.st !== "charge") e.face = dx > 0 ? 1 : -1;
+  if(!e.rage && e.hp <= e.maxHp * 0.5){
+    e.rage = true; e.flash = 20; shake = Math.max(shake, 10);
+    sfx(70,.6,"sawtooth",.14,-40);
+    explode(cx, e.y + e.h/2, "#ff2f14", 22, 5);
+  }
 
   // 重力
   e.vy += 0.6; e.y += e.vy;
@@ -3775,13 +4436,14 @@ function updateMini(e, p){
 
   e.stT++;
   if(e.st === "idle"){
-    if(dist > 300) e.x += e.face * 1.15;
-    else if(dist < 165) e.x -= e.face * 0.9;
-    if(e.stT > 52){
+    const spd = e.rage ? 1.55 : 1.15;
+    if(dist > 300) e.x += e.face * spd;
+    else if(dist < 165) e.x -= e.face * (spd*0.85);
+    if(e.stT > (e.rage ? 32 : 48)){
       e.stT = 0;
       const r = Math.random();
-      if(r < 0.42){ e.st = "wind"; e.warnT = 46; sfx(90,.5,"sawtooth",.10,-50); }
-      else if(r < 0.76){ e.st = "spit"; }
+      if(r < 0.46){ e.st = "wind"; e.warnT = e.rage ? 34 : 46; sfx(90,.5,"sawtooth",.10,-50); }
+      else if(r < 0.78){ e.st = "spit"; }
       else { e.st = "summon"; }
     }
   } else if(e.st === "wind"){
@@ -3791,9 +4453,9 @@ function updateMini(e, p){
       sfx(130,.45,"square",.13,-40);
     }
   } else if(e.st === "charge"){
-    e.x += e.chargeDir * 4.6;
-    shake = Math.max(shake, 4);
-    if(e.x < MINI_ARENA_L - 30 || e.x + e.w > MINI_ARENA_R + 30 || e.stT > 80){
+    e.x += e.chargeDir * (e.rage ? 6.0 : 4.6);
+    shake = Math.max(shake, e.rage ? 6 : 4);
+    if(e.x < A.l - 30 || e.x + e.w > A.r + 30 || e.stT > 80){
       e.st = "stun"; e.stT = 0; shake = Math.max(shake, 12);
       sfx(80,.5,"square",.14,-30);
       explode(e.x + e.w/2, e.y + e.h - 8, "#9aa0a8", 20, 4.5);
@@ -3802,30 +4464,41 @@ function updateMini(e, p){
     if(e.stT > 66){ e.st = "idle"; e.stT = 0; }
   } else if(e.st === "spit"){
     if(e.stT === 24){
-      for(let k=0;k<5;k++){
-        const ang = -Math.PI/2 + (k-2)*0.30;
+      const n = e.rage ? 7 : 5;
+      for(let k=0;k<n;k++){
+        const ang = -Math.PI/2 + (k-(n-1)/2)*0.26;
         ebullets.push({x:cx, y:e.y + 20, w:11, h:11, r:6,
                        vx:Math.cos(ang)*5.2, vy:Math.sin(ang)*5.2, g:0.26, life:220, acid:true});
       }
       sfx(170,.3,"sawtooth",.1,-70);
     }
-    if(e.stT > 72){ e.st = "idle"; e.stT = 0; }
+    if(e.stT > 62){ e.st = "idle"; e.stT = 0; }
   } else if(e.st === "summon"){
     if(e.stT === 28){
-      for(let k=0;k<2;k++){
-        const sx = cx + (k ? 96 : -96);
+      const n = e.rage ? 3 : 2;
+      for(let k=0;k<n;k++){
+        const sx = cx + (k - (n-1)/2)*96;
         const g2 = groundYAt(sx);
-        enemies.push(makeAlien(sx, g2 < Infinity ? g2 : GROUND_Y, "claw"));
+        enemies.push(makeAlien(sx, g2 < Infinity ? g2 : GROUND_Y, k === 1 ? "spit" : "claw"));
       }
       shake = Math.max(shake, 9); sfx(90,.42,"square",.12,-60);
       explode(cx, e.y + e.h - 6, "#7dfce8", 16, 4);
     }
-    if(e.stT > 62){ e.st = "idle"; e.stT = 0; }
+    if(e.stT > 58){ e.st = "idle"; e.stT = 0; }
   }
 }
 function drawMini(e, x, y){
   const f = e.face, flash = e.flash > 0;
   const bob = Math.sin(e.animT*1.4)*2;
+  const TONES = {
+    alien:{leg:"#241a33", arm:"#2b1f3d", blade:"#c9b6e8", body:"#3b2a55", spike:"#6f4aa8", head:"#4a3468", core:"#7dfce8"},
+    sea:  {leg:"#0b2a36", arm:"#123a48", blade:"#9fe8ff", body:"#17495c", spike:"#2b7f92", head:"#1d566a", core:"#5cd8ff"},
+    sand: {leg:"#3a2611", arm:"#4a3218", blade:"#ffdba0", body:"#6b4a24", spike:"#a8783a", head:"#7d5a2c", core:"#ffc85c"},
+    ice:  {leg:"#12303f", arm:"#1a4052", blade:"#d6f4ff", body:"#245267", spike:"#4a90aa", head:"#2c5e74", core:"#9fe8ff"},
+    space:{leg:"#1a1226", arm:"#2a1c3c", blade:"#ffbdf0", body:"#3a2450", spike:"#7a3f9e", head:"#4a2a66", core:"#ff7ad0"},
+  };
+  const C = TONES[e.tone] || TONES.alien;
+  const bodyC = e.rage ? (e.tone === "sand" ? "#8a3a14" : "#5a1a3a") : C.body;
   ctx.save();
   // 影子
   ctx.fillStyle = "rgba(0,0,0,.45)";
@@ -3845,7 +4518,7 @@ function drawMini(e, x, y){
     ctx.globalAlpha = 1;
   }
   // 后腿
-  ctx.fillStyle = "#241a33";
+  ctx.fillStyle = C.leg;
   ctx.beginPath();
   ctx.moveTo(x+22, y+62); ctx.lineTo(x+16, y+e.h); ctx.lineTo(x+40, y+e.h); ctx.lineTo(x+36, y+58);
   ctx.closePath(); ctx.fill();
@@ -3853,29 +4526,29 @@ function drawMini(e, x, y){
   ctx.moveTo(x+e.w-24, y+62); ctx.lineTo(x+e.w-40, y+e.h); ctx.lineTo(x+e.w-16, y+e.h); ctx.lineTo(x+e.w-34, y+58);
   ctx.closePath(); ctx.fill();
   // 双臂：巨大镰刀
-  ctx.strokeStyle = "#2b1f3d"; ctx.lineWidth = 9; ctx.lineCap = "round";
+  ctx.strokeStyle = C.arm; ctx.lineWidth = 9; ctx.lineCap = "round";
   const swing = e.st === "wind" ? -0.5 : (e.st === "charge" ? 0.5 : Math.sin(e.animT)*0.12);
   ctx.beginPath();
   ctx.moveTo(x+18, y+34+bob);
   ctx.lineTo(x-10 + f*6, y+30+bob + swing*20);
   ctx.stroke();
-  ctx.strokeStyle = "#c9b6e8"; ctx.lineWidth = 5;
+  ctx.strokeStyle = C.blade; ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.moveTo(x-10 + f*6, y+30+bob + swing*20);
   ctx.quadraticCurveTo(x-28 + f*6, y+40+bob + swing*26, x-16 + f*10, y+58+bob + swing*24);
   ctx.stroke();
-  ctx.strokeStyle = "#2b1f3d"; ctx.lineWidth = 9;
+  ctx.strokeStyle = C.arm; ctx.lineWidth = 9;
   ctx.beginPath();
   ctx.moveTo(x+e.w-18, y+34+bob);
   ctx.lineTo(x+e.w+10 - f*6, y+30+bob - swing*20);
   ctx.stroke();
-  ctx.strokeStyle = "#c9b6e8"; ctx.lineWidth = 5;
+  ctx.strokeStyle = C.blade; ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.moveTo(x+e.w+10 - f*6, y+30+bob - swing*20);
   ctx.quadraticCurveTo(x+e.w+28 - f*6, y+40+bob - swing*26, x+e.w+16 - f*10, y+58+bob - swing*24);
   ctx.stroke();
   // 躯干
-  ctx.fillStyle = flash ? "#fff" : "#3b2a55";
+  ctx.fillStyle = flash ? "#fff" : bodyC;
   ctx.beginPath();
   ctx.moveTo(x+16, y+22+bob);
   ctx.lineTo(x+e.w-16, y+22+bob);
@@ -3883,7 +4556,7 @@ function drawMini(e, x, y){
   ctx.lineTo(x+24, y+68);
   ctx.closePath(); ctx.fill();
   // 胸口发光核心（蓄力时变红）
-  const coreCol = e.st === "wind" ? "#ff2f14" : (e.st === "stun" ? "#5a6a7a" : "#7dfce8");
+  const coreCol = e.st === "wind" ? "#ff2f14" : (e.st === "stun" ? "#5a6a7a" : C.core);
   const pulse = 8 + Math.sin(e.animT*2.4)*2;
   ctx.globalAlpha = 0.85;
   const gc = ctx.createRadialGradient(x+e.w/2, y+40+bob, 1, x+e.w/2, y+40+bob, pulse*2.2);
@@ -3894,11 +4567,11 @@ function drawMini(e, x, y){
   ctx.fillStyle = coreCol;
   ctx.beginPath(); ctx.arc(x+e.w/2, y+40+bob, pulse*0.55, 0, 6.283); ctx.fill();
   // 肩甲尖刺
-  ctx.fillStyle = "#6f4aa8";
+  ctx.fillStyle = C.spike;
   ctx.beginPath(); ctx.moveTo(x+10, y+24+bob); ctx.lineTo(x+22, y+2+bob); ctx.lineTo(x+34, y+24+bob); ctx.closePath(); ctx.fill();
   ctx.beginPath(); ctx.moveTo(x+e.w-34, y+24+bob); ctx.lineTo(x+e.w-22, y+2+bob); ctx.lineTo(x+e.w-10, y+24+bob); ctx.closePath(); ctx.fill();
   // 头（四边形）与四只眼
-  ctx.fillStyle = flash ? "#fff" : "#4a3468";
+  ctx.fillStyle = flash ? "#fff" : C.head;
   ctx.beginPath();
   ctx.moveTo(x+e.w/2 - 16 + f*8, y+6+bob);
   ctx.lineTo(x+e.w/2 + 16 + f*8, y+6+bob);
@@ -3917,6 +4590,13 @@ function drawMini(e, x, y){
     ctx.fillStyle = "#ffd34d"; ctx.font = "16px monospace"; ctx.textAlign = "center";
     ctx.fillText("✶ ✶ ✶", x+e.w/2, y - 8);
     ctx.textAlign = "left";
+  }
+  // 狂暴：身体冒红光
+  if(e.rage){
+    ctx.globalAlpha = .18 + .1*Math.sin(perfNow*0.008);
+    ctx.fillStyle = "#ff2f14";
+    ctx.beginPath(); ctx.ellipse(x + e.w/2, y + e.h/2, e.w*0.6, e.h*0.6, 0, 0, 6.283); ctx.fill();
+    ctx.globalAlpha = 1;
   }
   ctx.restore();
 }
@@ -4579,7 +5259,15 @@ function drawAlienBoss(){
   hg.addColorStop(0, "#ff4f8b"); hg.addColorStop(1, "#ffb347");
   ctx.fillStyle = hg; ctx.fillRect(bx, by, bw*k, 14);
   ctx.fillStyle = "#e8f4ff"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
-  ctx.fillText(core.shielded ? "外星主脑 · 先打掉三只眼" : "外星主脑 · 核心暴露！", W/2, by - 8);
+  ctx.fillText(core.shielded ? "外星主脑 · 先打掉三只眼"
+                             : "外星主脑 · 核心暴露！" + (core.phase === 2 ? " · 狂暴" : ""),
+               W/2, by - 8);
+  // 二阶段：舱内红光
+  if(core.phase === 2 && !core.dead){
+    ctx.globalAlpha = .07 + .05*Math.sin(perfNow*0.006);
+    ctx.fillStyle = "#ff2f14"; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
   ctx.textAlign = "left";
   // 眼睛状态灯
   for(let i=0;i<b.cannons.length;i++){
@@ -5076,9 +5764,272 @@ function drawIronBalls(){
     ctx.restore();
   }
 }
+// ============ 第五~八关 Boss：母舰核心 ============
+function drawCarrierBoss(){
+  const b = boss;
+  const P = THEMES[b.tint] || THEMES.alien;
+  const wx = b.wallX - cam;
+  if(wx > W + 240) return;
+  const core = b.core, cx = core.x - cam, cy = core.y;
+  const pulse = 0.5 + 0.5*Math.sin(perfNow*0.003);
+  const rage = b.phase === 2;
+
+  // ---- 舱壁：装甲板 + 发光脉络 + 骨刺 ----
+  ctx.fillStyle = P.wall0; ctx.fillRect(wx, 0, W - wx + 240, H);
+  for(let sy = 0; sy < H; sy += 64){
+    ctx.fillStyle = ((sy/64)|0) % 2 ? P.wall1 : P.wall0;
+    ctx.fillRect(wx, sy, W - wx + 240, 62);
+    ctx.fillStyle = "rgba(0,0,0,.28)"; ctx.fillRect(wx, sy+61, W - wx + 240, 3);
+  }
+  ctx.strokeStyle = P.vein; ctx.lineWidth = 2;
+  for(let sy = 22; sy < H; sy += 64){
+    ctx.beginPath();
+    ctx.moveTo(wx, sy);
+    for(let x = wx; x < W + 120; x += 44) ctx.lineTo(x, sy + Math.sin((x + perfNow*0.03)*0.02)*5);
+    ctx.stroke();
+  }
+  ctx.fillStyle = P.spike;
+  for(let sy = 26; sy < H; sy += 92){
+    ctx.beginPath(); ctx.moveTo(wx, sy); ctx.lineTo(wx+30, sy+11); ctx.lineTo(wx, sy+24); ctx.closePath(); ctx.fill();
+  }
+
+  // ---- 舰体主结构（核心外围的重甲环）----
+  ctx.fillStyle = P.wall1;
+  ctx.beginPath(); ctx.ellipse(cx + 54, cy + core.h/2, 150, core.h*0.78, 0, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = P.top; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(cx + 54, cy + core.h/2, 150, core.h*0.78, 0, 0, 6.283); ctx.stroke();
+  // 环上的铆钉
+  for(let k=0;k<12;k++){
+    const a = k*Math.PI/6;
+    ctx.fillStyle = P.rivet;
+    ctx.fillRect(cx + 54 + Math.cos(a)*146 - 2, cy + core.h/2 + Math.sin(a)*core.h*0.76 - 2, 4, 4);
+  }
+
+  // ---- 核心：护盾 / 内核 ----
+  if(!core.dead){
+    const cxp = cx + core.w/2, cyp = cy + core.h/2;
+    const rad = 62;
+    // 内核光
+    const g = ctx.createRadialGradient(cxp, cyp, 6, cxp, cyp, rad + 26);
+    g.addColorStop(0, rage ? "#fff0f6" : "#f4ffff");
+    g.addColorStop(.35, P.accent);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = 0.55 + 0.35*pulse;
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cxp, cyp, rad + 26, 0, 6.283); ctx.fill();
+    ctx.globalAlpha = 1;
+    // 内部机械虹膜
+    ctx.fillStyle = "#0a0812";
+    ctx.beginPath(); ctx.arc(cxp, cyp, rad*0.72, 0, 6.283); ctx.fill();
+    ctx.fillStyle = rage ? "#ff5b8a" : P.accent;
+    ctx.beginPath(); ctx.arc(cxp, cyp, rad*0.5 + Math.sin(perfNow*0.004)*3, 0, 6.283); ctx.fill();
+    ctx.fillStyle = "#0a0812";
+    ctx.beginPath(); ctx.arc(cxp, cyp, rad*0.26, 0, 6.283); ctx.fill();
+    ctx.strokeStyle = P.top; ctx.lineWidth = 3;
+    for(let k=0;k<6;k++){
+      const a = k*Math.PI/3 + perfNow*0.0008;
+      ctx.beginPath();
+      ctx.moveTo(cxp + Math.cos(a)*rad*0.3, cyp + Math.sin(a)*rad*0.3);
+      ctx.lineTo(cxp + Math.cos(a)*rad*0.66, cyp + Math.sin(a)*rad*0.66);
+      ctx.stroke();
+    }
+    // 护盾：六边形格纹罩
+    if(core.shielded){
+      ctx.globalAlpha = 0.16 + 0.10*pulse;
+      ctx.fillStyle = P.accent;
+      ctx.beginPath(); ctx.arc(cxp, cyp, rad + 24, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cxp, cyp, rad + 24, 0, 6.283); ctx.stroke();
+      ctx.globalAlpha = 1;
+      // 受击闪白
+      if(core.flash > 0){
+        ctx.globalAlpha = .3; ctx.fillStyle = "#fff";
+        ctx.beginPath(); ctx.arc(cxp, cyp, rad + 26, 0, 6.283); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  } else {
+    // 核心被打爆：黑洞 + 余烬
+    const cxp = cx + core.w/2, cyp = cy + core.h/2;
+    ctx.fillStyle = "#05030a";
+    ctx.beginPath(); ctx.arc(cxp, cyp, 68, 0, 6.283); ctx.fill();
+    for(let k=0;k<10;k++){
+      ctx.fillStyle = "rgba(255," + (90+k*10) + ",40," + (0.15 + 0.2*Math.sin(perfNow*0.01 + k)) + ")";
+      ctx.fillRect(cxp - 30 + (k*13)%60, cyp - 30 + (k*23)%60, 3, 3);
+    }
+  }
+
+  // ---- 节点荚：核心与舱壁之间的能量荚 ----
+  for(const c of b.cannons){
+    const ex = c.x - cam + c.w/2, ey = c.y + c.h/2;
+    const charging = c.warnT > 0;
+    const recoil = c.burst > 0 ? 1 : 0;
+    // 连接管线（核心 ← 节点）
+    ctx.strokeStyle = c.dead ? "rgba(60,40,40,.5)" : P.vein;
+    ctx.lineWidth = c.dead ? 3 : 5;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.quadraticCurveTo(ex + 46, ey + Math.sin(perfNow*0.002 + c.idx)*10, cx + core.w/2, cy + core.h/2);
+    ctx.stroke();
+    if(c.dead){
+      ctx.fillStyle = "#06040a";
+      ctx.beginPath(); ctx.arc(ex, ey, 22, 0, 6.283); ctx.fill();
+      ctx.strokeStyle = "#3a2028"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(ex, ey, 22, 0, 6.283); ctx.stroke();
+      for(let k=0;k<3;k++){
+        ctx.fillStyle = "rgba(255,110,60," + (0.2 + 0.2*Math.sin(perfNow*0.01 + k)) + ")";
+        ctx.fillRect(ex - 9 + k*8, ey - 3 + (k%2)*6, 3, 3);
+      }
+      continue;
+    }
+    // 外荚
+    ctx.fillStyle = "#0b0a14";
+    ctx.beginPath(); ctx.arc(ex, ey, 24 + recoil, 0, 6.283); ctx.fill();
+    ctx.strokeStyle = charging ? "#ff2f14" : P.top; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(ex, ey, 24 + recoil, 0, 6.283); ctx.stroke();
+    // 内核（蓄力时收缩成红点）
+    const r2 = charging ? 6 + c.warnT*0.25 : 13 + Math.sin(perfNow*0.005 + c.idx)*1.6;
+    const gg = ctx.createRadialGradient(ex, ey, 1, ex, ey, r2 + 8);
+    gg.addColorStop(0, charging ? "#fff2ea" : "#ffffff");
+    gg.addColorStop(.5, charging ? "#ff2f14" : P.accent);
+    gg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = gg;
+    ctx.beginPath(); ctx.arc(ex, ey, r2 + 8, 0, 6.283); ctx.fill();
+    // 预警时向主角方向探出细瞄准线
+    if(charging){
+      ctx.globalAlpha = .5;
+      ctx.strokeStyle = "#ff2f14"; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex + Math.cos(c.gunA)*460, ey + Math.sin(c.gunA)*460);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- 主题杀招的视觉 ----
+  for(const s of b.specials){
+    if(s.type === "bolt"){
+      const gy = groundYAt(s.x);
+      const floor = gy < Infinity ? gy : GROUND_Y;
+      const sx = s.x - cam;
+      if(s.warn > 0){
+        const k = 1 - s.warn/44;
+        ctx.globalAlpha = .18 + .4*k;
+        ctx.fillStyle = "#8fe6ff";
+        ctx.fillRect(sx - 22, 0, 44, floor);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#d8faff"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.ellipse(sx, floor - 2, 34 + Math.sin(perfNow*0.01)*6, 9, 0, 0, 6.283); ctx.stroke();
+      } else if(s.beam > 0){
+        ctx.globalAlpha = .9;
+        ctx.fillStyle = "#eafcff";
+        ctx.fillRect(sx - 14, 0, 28, floor);
+        ctx.globalAlpha = .5;
+        ctx.fillStyle = "#5cd8ff";
+        ctx.fillRect(sx - 34, 0, 68, floor);
+        ctx.globalAlpha = 1;
+      }
+    } else if(s.type === "spike"){
+      const gy = groundYAt(s.x);
+      const floor = gy < Infinity ? gy : GROUND_Y;
+      const sx = s.x - cam;
+      if(s.warn > 0){
+        ctx.globalAlpha = .25 + .35*Math.abs(Math.sin(perfNow*0.02));
+        ctx.fillStyle = "#ff2f14";
+        ctx.beginPath(); ctx.ellipse(sx, floor - 2, 30, 8, 0, 0, 6.283); ctx.fill();
+        ctx.globalAlpha = 1;
+      } else if(s.up > 0){
+        const h = 100*s.up;
+        ctx.fillStyle = "#6b4a24";
+        for(let k=-1;k<=1;k++){
+          ctx.beginPath();
+          ctx.moveTo(sx + k*15 - 9, floor);
+          ctx.lineTo(sx + k*15, floor - h*(1 - Math.abs(k)*0.28));
+          ctx.lineTo(sx + k*15 + 9, floor);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.strokeStyle = "#ffc85c"; ctx.lineWidth = 2; ctx.stroke();
+      }
+    } else if(s.type === "ice"){
+      const sx = s.x - cam;
+      if(s.warn > 0){
+        const gy = groundYAt(s.x);
+        const floor = gy < Infinity ? gy : GROUND_Y;
+        ctx.globalAlpha = .3 + .35*Math.abs(Math.sin(perfNow*0.02));
+        ctx.strokeStyle = "#bfe9ff"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.ellipse(sx, floor - 2, 26, 7, 0, 0, 6.283); ctx.stroke();
+        ctx.globalAlpha = 1;
+      } else if(!s.dead){
+        ctx.fillStyle = "#d8f7ff";
+        ctx.beginPath();
+        ctx.moveTo(sx, s.y - 26); ctx.lineTo(sx + 13, s.y + 8); ctx.lineTo(sx, s.y + 22);
+        ctx.lineTo(sx - 13, s.y + 8); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = "#7fc8e0"; ctx.lineWidth = 2; ctx.stroke();
+      }
+    } else if(s.type === "rail"){
+      const sy = core.y + core.h/2;
+      if(s.warn > 0){
+        const k = 1 - s.warn/56;
+        ctx.globalAlpha = .18 + .5*k;
+        ctx.strokeStyle = "#ff7ad0"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx, s.y1); ctx.lineTo(0, s.y1); ctx.stroke();
+        ctx.globalAlpha = .3 + .4*k;
+        const g = ctx.createRadialGradient(cx, sy, 4, cx, sy, 90);
+        g.addColorStop(0,"#ffffff"); g.addColorStop(.4,"#ff7ad0"); g.addColorStop(1,"rgba(255,122,208,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(cx, sy, 90, 0, 6.283); ctx.fill();
+        ctx.globalAlpha = 1;
+      } else if(s.fire > 0){
+        const k = 1 - s.fire/84;
+        const y = s.y0 + (s.y1 - s.y0)*Math.min(1, k*1.35);
+        ctx.globalAlpha = .95;
+        ctx.fillStyle = "#fff2fb";
+        ctx.fillRect(0, y - 9, cx, 18);
+        ctx.globalAlpha = .5;
+        ctx.fillStyle = "#ff7ad0";
+        ctx.fillRect(0, y - 26, cx, 52);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // 二阶段：舱壁渗出的红光
+  if(rage){
+    ctx.globalAlpha = .10 + .07*Math.sin(perfNow*0.005);
+    ctx.fillStyle = "#ff2f14";
+    ctx.fillRect(wx, 0, W - wx + 240, H);
+    ctx.globalAlpha = 1;
+  }
+
+  // ===== 血条 / 节点状态 =====
+  if(!b.dead){
+    const alive = b.cannons.filter(c => !c.dead).length;
+    const bw = 520, bx = W/2 - bw/2, by = 86;
+    ctx.fillStyle = "#000a"; ctx.fillRect(bx-4, by-24, bw+8, 32);
+    ctx.fillStyle = "#20172c"; ctx.fillRect(bx, by, bw, 14);
+    const k = Math.max(0, core.hp / core.maxHp);
+    const hg = ctx.createLinearGradient(bx, 0, bx+bw, 0);
+    hg.addColorStop(0, P.accent); hg.addColorStop(1, rage ? "#ff2f14" : "#ffb347");
+    ctx.fillStyle = hg; ctx.fillRect(bx, by, bw*k, 14);
+    ctx.fillStyle = "#e8f4ff"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
+    ctx.fillText(core.shielded
+      ? b.name + " · 先打掉能量节点 (" + alive + "/" + b.cannons.length + ")"
+      : b.name + " · 核心暴露！" + (rage ? " · 狂暴" : ""), W/2, by - 8);
+    ctx.textAlign = "left";
+    // 节点状态灯
+    for(let i=0;i<b.cannons.length;i++){
+      const c = b.cannons[i];
+      ctx.fillStyle = c.dead ? "#3a2a52" : P.accent;
+      ctx.beginPath(); ctx.arc(bx + i*16, by + 24, 4.5, 0, 6.283); ctx.fill();
+    }
+  }
+}
 function drawBoss(){
+  if(!boss) return;
   if(boss.kind === "reactor") return drawReactor();
   if(boss.kind === "alien")   return drawAlienBoss();
+  if(boss.kind === "carrier") return drawCarrierBoss();
   const b = boss, wx = b.wallX - cam;
   if(wx > W + 100) return;
   const wallW = LEVEL_W - b.wallX + 300;
@@ -5570,12 +6521,9 @@ function drawHUD(){
   ctx.fillStyle="#fff"; ctx.font="bold 16px monospace";
   ctx.fillText("分数 " + score, 20, 32);
   // 关卡标签
-  ctx.fillStyle = LEVEL_IDX===1 ? "#7fd7a0" : (LEVEL_IDX===3 ? "#ff8b7a" : (LEVEL_IDX===4 ? "#c08bff" : "#7fbcff"));
+  ctx.fillStyle = STAGE_INFO[LEVEL_IDX].color;
   ctx.font="bold 13px monospace";
-  ctx.fillText(LEVEL_IDX===1 ? "第 1 关 · 丛林突击"
-             : LEVEL_IDX===3 ? "第 3 关 · 逃出基地"
-             : LEVEL_IDX===4 ? "第 4 关 · 外星巢穴"
-             : "第 2 关 · 基地突入", 20, 54);
+  ctx.fillText(stageLabel(LEVEL_IDX), 20, 54);
   // 生命（小人图标）
   for(let i=0;i<Math.max(0,lives);i++){
     ctx.fillStyle="#e8a878"; ctx.fillRect(20+i*24, 68, 10, 12);
@@ -5609,19 +6557,77 @@ function drawHUD(){
     ctx.fillStyle="#0008"; ctx.fillRect(W/2-150, H-24, 300, 8);
     ctx.fillStyle="#4da6ff"; ctx.fillRect(W/2-150, H-24, 300*Math.min(1,cam/(LEVEL_W-W)), 8);
   }
-  // 小 Boss 血条（第四关 · 孵化厅守卫）
-  if(LEVEL_IDX === 4 && mini && !mini.dead && Math.abs(player.x - mini.x) < 1500){
+  // 小 Boss 血条（第 4~8 关：各母舰的中段守卫）
+  if(mini && !mini.dead && Math.abs(player.x - mini.x) < 1500){
     const bw = 440, bx = W/2 - bw/2, by = 92;
     ctx.fillStyle = "#000a"; ctx.fillRect(bx-4, by-20, bw+8, 28);
     ctx.fillStyle = "#2a1f3a"; ctx.fillRect(bx, by, bw, 12);
     const k = Math.max(0, mini.hp / mini.maxHp);
     const g = ctx.createLinearGradient(bx, 0, bx+bw, 0);
-    g.addColorStop(0, "#7dfce8"); g.addColorStop(1, "#ff2f14");
+    g.addColorStop(0, "#7dfce8"); g.addColorStop(1, mini.rage ? "#ff2f14" : "#ff7b3d");
     ctx.fillStyle = g; ctx.fillRect(bx, by, bw*k, 12);
     ctx.fillStyle = "#e8f4ff"; ctx.font = "bold 12px monospace"; ctx.textAlign = "center";
-    ctx.fillText("外星督军 · 孵化厅守卫", W/2, by - 6);
+    ctx.fillText(mini.name + (mini.rage ? " · 狂暴" : ""), W/2, by - 6);
     ctx.textAlign = "left";
   }
+}
+function drawStageBreak(){
+  const d = STAGE_BREAK[nextStageIdx];
+  if(!d) return;
+  const t = stateTimer;
+  ctx.fillStyle = "#02040a"; ctx.fillRect(0,0,W,H);
+  // 背景：远处的母舰剪影 + 星点 + 扫描线
+  for(let i=0;i<70;i++){
+    const px = (i*173) % W, py = (i*97) % H;
+    ctx.globalAlpha = .12 + .35*Math.abs(Math.sin(i + perfNow*0.001));
+    ctx.fillStyle = "#9fc8e8"; ctx.fillRect(px, py, 1.6, 1.6);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "rgba(6,10,18,.72)";
+  ctx.beginPath(); ctx.ellipse(W/2, H*0.62, 400, 120, 0, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = "rgba(120,190,255,.16)"; ctx.lineWidth = 2;
+  for(let k=0;k<3;k++){
+    ctx.beginPath(); ctx.ellipse(W/2, H*0.62, 300 + k*60, 84 + k*20, 0, 0, 6.283); ctx.stroke();
+  }
+  // 扫描线
+  ctx.globalAlpha = .06; ctx.fillStyle = "#cfe8ff";
+  const scanY = (perfNow*0.08) % H;
+  ctx.fillRect(0, scanY, W, 2);
+  ctx.globalAlpha = 1;
+
+  const a = Math.min(1, t/24);
+  ctx.textAlign = "center";
+  ctx.globalAlpha = a;
+  ctx.fillStyle = d.color; ctx.font = "bold 13px monospace";
+  ctx.fillText("传 来 的 坐 标 · 下 一 艘 母 舰", W/2, 132);
+  ctx.fillStyle = "#ffffff"; ctx.font = "bold 40px monospace";
+  ctx.fillText(d.title, W/2, 190);
+  // 分隔线
+  ctx.strokeStyle = d.color; ctx.globalAlpha = a*0.6;
+  ctx.beginPath(); ctx.moveTo(W/2-300, 214); ctx.lineTo(W/2+300, 214); ctx.stroke();
+  ctx.globalAlpha = a;
+  // 正文（按字符折行）
+  ctx.font = "17px monospace"; ctx.fillStyle = "#cfd8e3";
+  let ly = 258;
+  for(const para of d.lines){
+    let line = "";
+    for(const ch of para){
+      line += ch;
+      if(line.length >= 40){ ctx.fillText(line, W/2, ly); line = ""; ly += 28; }
+    }
+    if(line){ ctx.fillText(line, W/2, ly); ly += 28; }
+    ly += 10;
+  }
+  // 下一关
+  const info = STAGE_INFO[nextStageIdx];
+  ctx.fillStyle = info.color; ctx.font = "bold 24px monospace";
+  ctx.fillText("下一站：" + stageLabel(nextStageIdx), W/2, H - 104);
+  if(Math.floor(perfNow/450)%2 === 0){
+    ctx.fillStyle = "#e8f0ff"; ctx.font = "14px monospace";
+    ctx.fillText("- 按 Enter 立即出发 -", W/2, H - 70);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = "left";
 }
 function drawOverlay(title, sub, color){
   ctx.fillStyle="#000c"; ctx.fillRect(0,0,W,H);
@@ -5646,12 +6652,21 @@ function render(){
   if(state==="insert") drawInsert();
   if(state==="title"){
     ctx.restore();
-    drawOverlay("魂斗罗", "第 1 关 · 丛林突击　→　第 2 关 · 基地突入\n第 3 关 · 逃出基地　→　第 4 关 · 外星巢穴", "#4da6ff");
+    drawOverlay("魂斗罗",
+      "第 1 关 丛林突击　→　第 2 关 基地突入\n" +
+      "第 3 关 逃出基地　→　第 4 关 外星巢穴\n" +
+      "第 5 关 深海母舰　→　第 6 关 沙海母舰\n" +
+      "第 7 关 冰盖母舰　→　第 8 关 轨道母舰", "#4da6ff");
     return;
   }
   if(state==="reveal"){
     ctx.restore();
     drawReveal();
+    return;
+  }
+  if(state==="stagebreak"){
+    ctx.restore();
+    drawStageBreak();
     return;
   }
   drawTerrain();
@@ -5678,20 +6693,17 @@ function render(){
   drawHUD();
   drawAftermathText();
   drawEscapeFx();
-  if(state==="over"){ drawOverlay("游戏结束", (LEVEL_IDX===1?"第一关":LEVEL_IDX===3?"第三关":"第二关") + " · 击杀 " + killCount + " · 得分 " + score, "#ff5b3d"); }
+  if(state==="over"){ drawOverlay("游戏结束", stageLabel(LEVEL_IDX) + " · 击杀 " + killCount + " · 得分 " + score, "#ff5b3d"); }
   // 关卡开场横幅
   if(bannerT>0 && state==="play"){
-    const a = Math.min(1, Math.min(bannerT, 170-bannerT)/30);
-    const bTitle = LEVEL_IDX===3 ? "第 3 关 · 逃出基地"
-                 : LEVEL_IDX===4 ? "第 4 关 · 外星巢穴"
-                 : "第 2 关 · 基地突入";
-    const bSub   = LEVEL_IDX===3 ? "逃出基地 —— 回头跑！出口在最左边"
-                 : LEVEL_IDX===4 ? "叛军的科技原来来自这里 —— 打进母舰核心"
-                 : "潜入敌军基地 —— 摧毁反应堆核心";
+    const info = STAGE_INFO[LEVEL_IDX];
+    const a = Math.max(0, Math.min(1, Math.min(bannerT, 230-bannerT)/30));
+    const bTitle = stageLabel(LEVEL_IDX);
+    const bSub   = info.sub;
     ctx.globalAlpha = Math.max(0, a);
     ctx.textAlign="center";
     ctx.fillStyle="#0a1018"; ctx.fillRect(0, H/2-58, W, 96);
-    ctx.fillStyle = LEVEL_IDX===3 ? "#ff6b52" : "#7fbcff"; ctx.font="bold 40px monospace";
+    ctx.fillStyle = info.color; ctx.font="bold 40px monospace";
     ctx.fillText(bTitle, W/2, H/2-10);
     ctx.fillStyle="#cfd8e3"; ctx.font="15px monospace";
     ctx.fillText(bSub, W/2, H/2+22);
@@ -5722,24 +6734,33 @@ function render(){
     ctx.textAlign="left";
   }
   if(state==="win" && LEVEL_IDX>=2){
-    const alien = LEVEL_IDX === 4;
+    const finalWin = LEVEL_IDX === 8;
     ctx.fillStyle="#000e"; ctx.fillRect(0,0,W,H);
     ctx.textAlign="center";
-    ctx.fillStyle = alien ? "#7dfce8" : "#ff8b6a"; ctx.font="bold 44px monospace";
-    ctx.fillText(alien ? "外星阴谋粉碎！" : "逃出生天！", W/2, H/2-96);
-    ctx.fillStyle="#c08bff"; ctx.font="bold 20px monospace";
-    ctx.fillText(alien ? "母舰核心被击穿 —— 叛军背后的主人沉入地底"
-                       : "整座工厂在身后轰然倒塌", W/2, H/2-52);
-    ctx.fillStyle="#cfd8e3"; ctx.font="16px monospace";
-    ctx.fillText("第一关 · 丛林突击   ✔", W/2, H/2-4);
-    ctx.fillText("第二关 · 基地突入   ✔", W/2, H/2+26);
-    ctx.fillText("第三关 · 逃出基地   ✔", W/2, H/2+56);
-    if(alien) ctx.fillText("第四关 · 外星巢穴   ✔", W/2, H/2+86);
+    ctx.fillStyle = finalWin ? "#ff7ad0" : "#ff8b6a"; ctx.font="bold 44px monospace";
+    ctx.fillText(finalWin ? "母巢坠落 · 全剧终" : "逃出生天！", W/2, H/2-150);
+    ctx.fillStyle="#c08bff"; ctx.font="bold 18px monospace";
+    ctx.fillText(finalWin ? "轨道母舰在高空解体 —— 八艘母舰，一艘不剩"
+                          : "整座工厂在身后轰然倒塌", W/2, H/2-112);
+    const list = [
+      "1 丛林突击  ✔", "2 基地突入  ✔", "3 逃出基地  ✔", "4 外星巢穴  ✔",
+      "5 深海母舰  ✔", "6 沙海母舰  ✔", "7 冰盖母舰  ✔", "8 轨道母舰  ✔",
+    ];
+    ctx.font="15px monospace";
+    list.forEach((s, i) => {
+      const col = i < 4 ? 0 : 1, row = i % 4;
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#cfd8e3";
+      ctx.fillText(s, W/2 - 300 + col*310, H/2 - 62 + row*30);
+    });
+    ctx.textAlign="center";
     ctx.fillStyle="#ffd34d"; ctx.font="bold 22px monospace";
-    ctx.fillText("总得分 " + score + " · 总击杀 " + killCount, W/2, H/2+(alien?136:112));
+    ctx.fillText("总得分 " + score + " · 总击杀 " + killCount, W/2, H/2+92);
+    ctx.fillStyle="#8fa0b5"; ctx.font="14px monospace";
+    ctx.fillText(finalWin ? "从丛林到轨道，你打穿了整条外星供应链" : "", W/2, H/2+122);
     if(Math.floor(perfNow/500)%2===0){
       ctx.fillStyle="#fff"; ctx.font="16px monospace";
-      ctx.fillText("- 按 Enter 重新开始 -", W/2, H/2+(alien?178:156));
+      ctx.fillText("- 按 Enter 重新开始 -", W/2, H/2+160);
     }
     ctx.textAlign="left";
   }

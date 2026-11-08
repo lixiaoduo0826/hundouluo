@@ -66,6 +66,7 @@ globalThis.__D = {
   get runExitX(){return runExitX}, get runStartX(){return runStartX},
   respawnInRun, hurtPlayer,
   startAlienLair, spawnMini, shootBulletOnly,
+  safeSpawnPoint, get HUNTER_CFG(){return HUNTER_CFG},
   get mini(){return mini}, get miniSpawned(){return miniSpawned},
   get MINI_ARENA_L(){return MINI_ARENA_L}, get MINI_ARENA_R(){return MINI_ARENA_R},
   get L4_W(){return L4_W},
@@ -709,7 +710,7 @@ D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.in
 step(3);
 ok("走进孵化厅触发小 Boss", !!D.mini && D.mini.kind === "mini", D.mini ? "hp=" + D.mini.hp : "没刷出来");
 D.p.x = D.MINI_ARENA_L - 400; step(2);
-ok("小 Boss 存活时被锁在孵化厅（不能跑掉）", D.p.x >= D.MINI_ARENA_L - 2,
+ok("小 Boss 不再锁场（主角可以自由后退离开孵化厅）", D.p.x < D.MINI_ARENA_L - 300,
    "p.x=" + D.p.x.toFixed(0) + " 左边界=" + D.MINI_ARENA_L);
 const stSeen = new Set();
 let alienSpawned = false;
@@ -802,8 +803,9 @@ console.log("\n【9】第五~八关 · 全球母舰");
     ok(`第 ${n} 关 沿途有外星守军`, aliens >= 8, "外星兵触发点 " + aliens + " 个");
     ok(`第 ${n} 关 武器跨关保留`, D.p.weapon === "L" && D.p.wlv.L === 2,
        D.p.weapon + " Lv" + (D.p.wlv.L + 1));
-    const expectNodes = (n === 5 || n === 6) ? 4 : 5;
-    ok(`第 ${n} 关 Boss 是「${D.boss.name}」`, D.boss.kind === "carrier" && D.boss.cannons.length === expectNodes,
+    const expectKind = n === 8 ? "carrier" : (n === 6 ? "hunterAir" : "hunter");
+    const expectNodes = n === 8 ? 5 : 0;
+    ok(`第 ${n} 关 Boss 是「${D.boss.name}」`, D.boss.kind === expectKind && D.boss.cannons.length === expectNodes,
        D.boss.kind + " / 节点 " + D.boss.cannons.length + " / 核心 " + D.boss.core.maxHp);
   }
 
@@ -811,7 +813,7 @@ console.log("\n【9】第五~八关 · 全球母舰");
   D.advanceTo(4); step(2);
   const l4 = { core: D.boss.core.maxHp, eye: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
   D.advanceTo(5); step(2);
-  const l5 = { core: D.boss.core.maxHp, node: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
+  const l5 = { core: D.boss.core.maxHp, mini: D.miniArena.hp };
   D.advanceTo(8); step(2);
   const l8 = { core: D.boss.core.maxHp, node: D.boss.cannons[0].maxHp, mini: D.miniArena.hp };
   ok("第四关 Boss 大幅强化（核心 70→150 / 眼睛 14→26）", l4.core >= 150 && l4.eye >= 26,
@@ -838,36 +840,36 @@ console.log("\n【9】第五~八关 · 全球母舰");
   step(4);
   ok("击败守卫解锁通道", D.mini.rewarded === true, "rewarded=" + D.mini.rewarded);
 
-  // 母舰核心战：节点护盾 → 三连攻击 → 主题杀招 → 破盾
+  // 第五关：移动型 Boss —— 会走、会跳、会蹲、会抬枪点射，打完有冷却
   D.advanceTo(5); step(2);
-  D.p.x = D.boss.wallX - 320;
-  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.inv = 99999;
+  D.p.x = Math.max(60, D.boss.core.x - 520);
+  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
   step(4);
-  ok("走到母舰核心激活 Boss", D.boss.active === true, "active=" + D.boss.active);
-  let sawWarn2 = false, sawBurst = false, sawSpecial = false;
-  const spTypes = new Set();
-  for (let i = 0; i < 900; i++) {
+  ok("走近后移动型 Boss 激活", D.boss.active === true, "active=" + D.boss.active);
+  const bx0 = D.boss.core.x;
+  let sawWarn = false, sawBurst = false, sawCd = false, sawJump = false, sawDuck = false;
+  let minDist = 1e9;
+  for (let i = 0; i < 1500; i++) {
     step(1); D.p.inv = 99999;
-    for (const c of D.boss.cannons) {
-      if (c.warnT > 0) sawWarn2 = true;
-      if (c.burst > 0) sawBurst = true;
-    }
-    for (const s of D.boss.specials) { sawSpecial = true; spTypes.add(s.type); }
+    const c = D.boss.core;
+    if (c.warnT > 0) sawWarn = true;
+    if (c.burst > 0) sawBurst = true;
+    if (sawBurst && c.burst <= 0 && c.shootCd > 0) sawCd = true;
+    if (c.vy < -3) sawJump = true;
+    if (c.crouchT > 0) sawDuck = true;
+    minDist = Math.min(minDist, Math.abs((D.p.x + D.p.w/2) - (c.x + c.w/2)));
   }
-  ok("节点荚先预警再开火（不是无提示扫射）", sawWarn2 && sawBurst,
-     "预警=" + sawWarn2 + " 连发=" + sawBurst);
-  ok("深海母舰有专属杀招（电浆柱）", sawSpecial && spTypes.has("bolt"),
-     "出现过：" + [...spTypes].join("、"));
-  ok("节点没打完时核心带护盾", D.boss.core.shielded === true, "shielded=" + D.boss.core.shielded);
-  for (const c of D.boss.cannons) { c.hp = 0; c.dead = true; }
-  step(2);
-  ok("打掉全部节点后核心破盾", D.boss.core.shielded === false, "shielded=" + D.boss.core.shielded);
-  D.boss.core.hp = Math.floor(D.boss.core.maxHp * 0.4);
-  step(2);
-  ok("核心半血进入二阶段", D.boss.phase === 2, "phase=" + D.boss.phase);
+  ok("移动型 Boss 会主动接近主角（不再钉在墙上）",
+     Math.abs(D.boss.core.x - bx0) > 30 || minDist < 420,
+     "x " + bx0.toFixed(0) + " → " + D.boss.core.x.toFixed(0) + " / 最近距离 " + minDist.toFixed(0));
+  ok("移动型 Boss 开火有前摇（红色预警线）", sawWarn, "warnT 出现过=" + sawWarn);
+  ok("移动型 Boss 点射后进入冷却（玩家有喘息）", sawBurst && sawCd,
+     "点射=" + sawBurst + " 冷却=" + sawCd);
+  ok("移动型 Boss 会跳跃", sawJump, "vy<-3 出现过=" + sawJump);
+  ok("移动型 Boss 会蹲下（躲平射）", sawDuck, "crouch 出现过=" + sawDuck);
   D.boss.core.hp = 0; D.boss.core.dead = true;
   D.killCore();
-  ok("击穿母舰核心", D.boss.dead === true, "boss.dead=" + D.boss.dead);
+  ok("击穿移动型 Boss", D.boss.dead === true, "boss.dead=" + D.boss.dead);
 
   // 关卡过场：字幕 → 下一关
   D.startStageBreak(6);
@@ -888,6 +890,64 @@ console.log("\n【9】第五~八关 · 全球母舰");
   ok("击穿母巢核心 → 全剧终判定", D.boss.dead === true, "boss.dead=" + D.boss.dead);
   const tints = [5, 6, 7, 8].map(n => D.themePal(n).accent);
   ok("五~八关各有独立配色主题", new Set(tints).size === 4, tints.join(" "));
+}
+
+// ================= 小 Boss 跟随 / 不锁场 / 重生点 / 连铲 =================
+console.log("\n【10】小 Boss 不锁场 · 全图跟随 · 重生点修复 · 连续滑铲");
+{
+  D.advanceTo(5); step(2);
+  D.p.x = D.miniArena.l + 90;
+  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
+  step(3);
+  ok("第五关 中段小 Boss 刷出", !!D.mini && !D.mini.dead, D.mini ? D.mini.name : "没刷出来");
+
+  // 主角一路冲过原来的场地右界
+  const arenaR = D.miniArena.r;
+  D.p.x = arenaR + 800;
+  D.p.y = D.groundYAt(D.p.x + 11) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
+  step(2);
+  ok("小 Boss 不再把主角夹在场地里", D.p.x > arenaR + 700,
+     "p.x=" + D.p.x.toFixed(0) + " / 场地右界 " + arenaR);
+  const gap0 = Math.abs(D.mini.x - D.p.x);
+  for (let i = 0; i < 420; i++) { step(1); D.p.inv = 99999; }
+  const gap1 = Math.abs(D.mini.x - D.p.x);
+  ok("小 Boss 会一路追到主角身边", gap1 < 300,
+     "距离 " + gap0.toFixed(0) + " → " + gap1.toFixed(0));
+
+  // 掉出世界也不会永久消失
+  D.mini.y = D.H + 200;
+  step(4); D.p.inv = 99999;
+  ok("小 Boss 掉出世界会自动爬回来", D.mini.y < D.H, "y=" + D.mini.y.toFixed(0));
+
+  // 重生点：检查点压在断崖上也能落到实地
+  D.advanceTo(1); step(2);
+  let voidX = -1;
+  for (let x = 200; x < D.LEVEL_W - 200; x += 10) {
+    if (D.groundYAt(x) === Infinity) { voidX = x; break; }
+  }
+  ok("第一关存在断崖（测试前提）", voidX > 0, "首个断崖 x=" + voidX);
+  const sp = D.safeSpawnPoint(voidX);
+  ok("重生点自动避开断崖（不再卡进地底连死）",
+     isFinite(sp.y) && D.groundYAt(sp.x + 11) < Infinity,
+     "x=" + sp.x.toFixed(0) + " y=" + sp.y.toFixed(0));
+
+  // 连续滑铲
+  D.startGame(); D.state = "play"; step(2);
+  D.enemies.length = 0;
+  D.p.x = 400; D.p.y = D.groundYAt(411) - D.p.h; D.p.onGround = true; D.p.vy = 0; D.p.inv = 99999;
+  clearKeys(); step(2);
+  key("ArrowDown"); step(2); key("ArrowRight");
+  const sl0 = D.p.x;
+  step(20);
+  const sl1 = D.p.x;
+  step(110);
+  const sl2 = D.p.x;
+  ok("按住 ↓+→ 会自己开启滑铲", sl1 - sl0 > 30, "20 帧位移 " + (sl1 - sl0).toFixed(0));
+  ok("按住不放能一直连铲（不用反复点按）", sl2 - sl1 > 200,
+     "之后 110 帧位移 " + (sl2 - sl1).toFixed(0));
+  clearKeys(); step(24);
+  ok("松开方向键后恢复站立", D.p.slideT === 0 && !D.p.crouch,
+     "slideT=" + D.p.slideT + " crouch=" + D.p.crouch);
 }
 
 // ================= 渲染不报错 =================

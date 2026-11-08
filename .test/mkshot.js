@@ -195,24 +195,38 @@ window.addEventListener("load", () => {
       advanceTo(n); state = "play"; stateTimer = 0; bannerT = 0;
       enemies.length = 0; ebullets.length = 0;
       boss.active = true; boss.t = 220;
-      if (n === 5) {
-        boss.specials.push({type:"bolt", x: boss.wallX - 340, t: 0, warn: 18, beam: 0, hit: false});
-        boss.cannons[0].warnT = 14; boss.cannons[1].burst = 2; boss.cannons[1].gunA = Math.PI - 0.1;
-      } else if (n === 6) {
-        boss.specials.push({type:"spike", x: boss.wallX - 300, t: 0, warn: 0, up: 1, hit: false, hold: 4});
-        boss.specials.push({type:"spike", x: boss.wallX - 430, t: 0, warn: 28, up: 0, hit: false, hold: 0});
-        boss.cannons[0].warnT = 16;
-      } else if (n === 7) {
-        boss.specials.push({type:"ice", x: boss.wallX - 300, y: 150, vy: 5, t: 0, warn: 0, hit: false, dead: false});
-        boss.specials.push({type:"ice", x: boss.wallX - 440, y: 60, vy: 4, t: 0, warn: 0, hit: false, dead: false});
-        boss.cannons[0].warnT = 18; boss.cannons[2].warnT = 8;
-      } else {
+      if (n === 8) {
         boss.core.hp = Math.floor(boss.core.maxHp * 0.4);
-        boss.specials.push({type:"rail", t: 60, warn: 0, fire: 60, y0: p.y + 18, y1: p.y + 18, hit: false});
+        boss.specials.push({type:"rail", t: 60, warn: 0, fire: 60, y0: 300, y1: 300, hit: false});
         for (const c of boss.cannons) { c.hp = 0; c.dead = true; }
+        place(boss.wallX - 360); cam = boss.wallX - 760;
+        player.face = 1; player.aimAng = 0; player.inv = 0;
+      } else {
+        const bc = boss.core;
+        const bx = LEVEL_W - 640;
+        bc.x = bx;
+        bc.y = groundYAt(bx + bc.w/2) - bc.h - (boss.air ? 140 : 0);
+        player.x = bx - 400; player.y = groundYAt(player.x + 11) - player.h;
+        player.onGround = true; player.face = 1; player.aimAng = 0; player.inv = 99999;
+        player.weapon = "L"; player.wlv.L = 2;
+        cam = Math.max(0, player.x - W*0.40);
+        bc.warnT = 16;
+        bc.aimA = Math.atan2((player.y + player.h*0.45) - (bc.y + bc.h*0.38),
+                             (player.x + player.w/2) - (bc.x + bc.w/2));
+        bc.hp = Math.floor(bc.maxHp * (n === 7 ? 0.44 : 0.92));
+        if (n === 7) { boss.rage = true; bc.windDash = 22; }
+        ebullets.push({x: player.x + 320, y: player.y + 24, w: 9, h: 9, r: 5,
+                       vx: -5, vy: 0, life: 200, alien: true});
       }
-      place(boss.wallX - 360); cam = boss.wallX - 760;
-      player.face = 1; player.aimAng = 0; player.inv = 0;
+    } else if (mode === "minichase") {
+      // 小 Boss 全图追击：主角已跑出原场地，小 Boss 跟在身后
+      startAlienLair(); state = "play"; stateTimer = 0; bannerT = 0;
+      enemies.length = 0; ebullets.length = 0;
+      spawnMini();
+      place(6900); cam = 6900 - 300;
+      mini.x = 6900 - 330; mini.y = groundYAt(mini.x + 52) - mini.h; mini.vy = 0;
+      mini.face = 1; mini.st = "idle"; mini.stT = 0;
+      p.face = 1; p.aimAng = 0; p.inv = 99999;
       player.weapon = "L"; player.wlv.L = 2;
     } else if (mode === "stagebreak") {
       state = "stagebreak"; stateTimer = 200; nextStageIdx = 6;

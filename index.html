@@ -14,7 +14,7 @@
 <body>
 <div id="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 蹲下+←/→ 滑铲 &nbsp;|&nbsp; 栈桥上蹲下+2 = 落到下一层 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑ 抬枪向上（拾取时按住=换枪） &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
+  <div id="tip">← → 移动 &nbsp;|&nbsp; 2/X 跳跃 &nbsp;|&nbsp; ↓ 蹲下 &nbsp;|&nbsp; 按住 ↓+←/→ 一直滑铲 &nbsp;|&nbsp; 栈桥上蹲下+2 = 落到下一层 &nbsp;|&nbsp; 1/Z/空格 开火 &nbsp;|&nbsp; ↑ 抬枪向上（拾取时按住=换枪） &nbsp;|&nbsp; M BGM静音 &nbsp;|&nbsp; Enter 开始</div>
 </div>
 <script>
 "use strict";
@@ -701,7 +701,7 @@ const CARRIER_CFG = {
   5:{nodes:4, nodeHp:34, coreHp:230, tint:"sea",   special:"bolt",    name:"深海母舰 · 利维坦"},
   6:{nodes:4, nodeHp:40, coreHp:290, tint:"sand",  special:"spike",   name:"沙海母舰 · 蝎王"},
   7:{nodes:5, nodeHp:44, coreHp:350, tint:"ice",   special:"icefall", name:"冰盖母舰 · 霜牙"},
-  8:{nodes:5, nodeHp:54, coreHp:470, tint:"space", special:"rail",    name:"轨道母舰 · 母巢"},
+  8:{nodes:5, nodeHp:44, coreHp:300, tint:"space", special:"rail",    name:"轨道母舰 · 母巢"},
 };
 // 4→5→6→7→8 的过场字幕
 const STAGE_BREAK = {
@@ -818,12 +818,32 @@ let alienRage = 0;         // 第四关最终 Boss 的二阶段演出计时
 let lives, score, usedTriggers, checkpoint, state, stateTimer, shake, killCount;
 let autoSpawnT = 0, bannerT = 0;
 
+// 找一个"脚下一定有地"的落点。
+// 检查点有时正好压在深坑 / 被砸穿的地板上，直接按 groundYAt(x) 落位会让主角生在虚空里：
+// 一落地就往下掉 → 触发掉坑死亡 → 又回到同一个虚空点……看起来就是"卡进地底连死"。
+function safeSpawnPoint(x){
+  const probe = (xx) => {
+    if(xx < 0 || xx > LEVEL_W - 24) return null;
+    const g = groundYAt(xx + 11);
+    return (typeof g === "number" && isFinite(g) && g < H + 40) ? g : null;
+  };
+  let g = probe(x);
+  if(g !== null) return {x, y: g - 38};
+  for(let d = 24; d <= 620; d += 24){
+    for(const xx of [x - d, x + d]){
+      const gg = probe(xx);
+      if(gg !== null) return {x: xx, y: gg - 38};
+    }
+  }
+  return {x: Math.max(0, Math.min(x, LEVEL_W - 24)), y: GROUND_Y - 38};
+}
 // 重置主角。keepGear=true 时保留上一关带过来的武器与等级（关卡切换不掉枪）
 function resetPlayer(x, keepGear){
   const kw = (keepGear && player) ? player.weapon : "N";
   const kl = (keepGear && player) ? {...player.wlv} : {S:0,M:0,L:0,B:0};
+  const sp = safeSpawnPoint(x);
   player = {
-    x:x, y:groundYAt(x+11)-38, w:22, h:38, vx:0, vy:0,
+    x:sp.x, y:sp.y, w:22, h:38, vx:0, vy:0,
     face:1, onGround:true, hp:1, inv:120, // 2秒无敌
     fireCd:0, bulletCd:0, weapon:kw, wlv:kl, aimAng:0, animT:0, dead:false,
     slideT:0, slideV:0, slideDir:1, slideCd:0, slideAge:0, prevL:false, prevR:false,
@@ -865,8 +885,11 @@ function makeBoss(idx){
       ],
       tentacles: [], spawnT: 0, roarT: 0,
     };
-  } else if(idx >= 5){
-    // 第五~八关：母舰核心（节点荚 + 中央核心 + 主题专属杀招）
+  } else if(idx >= 5 && idx <= 7){
+    // 第五~七关：移动型 Boss —— 不站在右侧舱壁上，会走、会跳、会蹲、会点射
+    makeHunterBoss(idx);
+  } else if(idx >= 8){
+    // 第八关：母舰核心（节点荚 + 中央核心 + 轨道主炮）——最终决战保留舱壁巨构
     const cfg = CARRIER_CFG[idx];
     const wx = LEVEL_W - 420;
     const n = cfg.nodes, top = 92, bot = 396;
@@ -922,7 +945,7 @@ function updateAlienBoss(b, p){
     if(c.dead) continue;
     c.t++;
     const cx = c.x + c.w/2, cy = c.y + c.h/2;
-    const period = phase2 ? 124 : 176;
+    const period = phase2 ? 178 : 240;      // 眼睛开火的间隔（越大越松）
     if(c.warnT <= 0 && c.beamT <= 0 && (c.t % period === 0) && !p.dead){
       c.warnT = 30; c.beamW = phase2 ? 20 : 17;
       c.lockX = p.x + p.w/2; c.lockY = p.y + p.h*0.55;
@@ -944,21 +967,21 @@ function updateAlienBoss(b, p){
     if(aabb(hitbox(), c) && p.inv <= 0) hurtPlayer();
   }
 
-  // ---- 核心：环形弹幕（护盾期 10 / 破盾 12 / 二阶段 16）----
+  // ---- 核心：环形弹幕（护盾期 6 / 破盾 8 / 二阶段 10）----
   if(!core.dead){
-    const n = core.shielded ? 10 : (phase2 ? 16 : 12);
-    if(b.t % (phase2 ? 170 : 240) === 40){
+    const n = core.shielded ? 6 : (phase2 ? 10 : 8);
+    if(b.t % (phase2 ? 300 : 380) === 40){
       for(let k=0;k<n;k++){
         const ang = b.t*0.04 + k*Math.PI*2/n;
         ebullets.push({x:core.x+core.w/2, y:core.y+core.h/2, w:9, h:9, r:5,
-                       vx:Math.cos(ang)*3.9, vy:Math.sin(ang)*3.9, life:240, alien:true});
+                       vx:Math.cos(ang)*3.4, vy:Math.sin(ang)*3.4, life:240, alien:true});
       }
       S.shoot();
     }
-    // 触须拍地：玩家脚下先出现预警圈，再弹出地刺
-    if(!core.shielded && b.t % (phase2 ? 150 : 190) === 100 && b.tentacles.length < 4){
+    // 触须拍地：玩家脚下先出现预警圈，再弹出地刺（一次最多两根，且预警拉长）
+    if(!core.shielded && b.t % (phase2 ? 300 : 380) === 190 && b.tentacles.length < 2){
       const tx = Math.max(b.wallX - 960, Math.min(b.wallX - 40, p.x + p.w/2));
-      b.tentacles.push({x:tx, t:0, warn:40, up:0, hit:false});
+      b.tentacles.push({x:tx, t:0, warn:52, up:0, hit:false});
       sfx(120,.4,"square",.10,-40);
     }
     if(aabb(hitbox(), core) && p.inv <= 0) hurtPlayer();
@@ -977,11 +1000,11 @@ function updateAlienBoss(b, p){
   }
   b.tentacles = b.tentacles.filter(tn => tn.t < 130);
 
-  // ---- 召唤爪兵 ----
+  // ---- 召唤爪兵（间隔拉长，场上不会被小兵堵死）----
   b.spawnT++;
-  if(!core.dead && b.spawnT > (phase2 ? 240 : 360)){
+  if(!core.dead && b.spawnT > (phase2 ? 420 : 560)){
     b.spawnT = 0;
-    for(let k=0;k<(phase2 ? 3 : 2);k++){
+    for(let k=0;k<(phase2 ? 2 : 1);k++){
       const sx = b.wallX - 280 - k*130;
       const gy = groundYAt(sx);
       enemies.push(makeAlien(sx, gy < Infinity ? gy : GROUND_Y, k === 1 ? "spit" : "claw"));
@@ -990,7 +1013,175 @@ function updateAlienBoss(b, p){
   }
 }
 
-// ============ 第五~八关 Boss：母舰核心（节点荚 + 主题杀招） ============
+// ============ 第五~七关 Boss：会自己走动的守卫 ============
+// 不再是"钉在右侧舱壁上的靶子"：它会追、会退、会跳、会蹲、会抬枪点射，
+// 但开火有 28 帧明显前摇 + 打空后 100 帧冷却，玩家永远有喘息和走位的窗口。
+const HUNTER_CFG = {
+  5:{hp:170, tint:"sea",  name:"深海守卫 · 猎潮者", air:false, dash:false, shots:3, cd:104},
+  6:{hp:195, tint:"sand", name:"沙海母舰 · 沙暴之眼", air:true,  dash:false, shots:3, cd:118},
+  7:{hp:220, tint:"ice",  name:"冰盖母舰 · 霜卫",   air:false, dash:true,  shots:3, cd:96},
+};
+function makeHunterBoss(idx){
+  const cfg = HUNTER_CFG[idx];
+  const air = !!cfg.air;
+  const w = air ? 66 : 50, h = air ? 62 : 70;
+  const sx = LEVEL_W - 660;
+  const gy = groundYAt(sx + w/2);
+  const floor = gy < Infinity ? gy : GROUND_Y;
+  boss = {
+    kind: air ? "hunterAir" : "hunter", level: idx, tint: cfg.tint, name: cfg.name,
+    air, active:false, dead:false, t:0, rage:false, wallX: 0,
+    cannons: [],                                   // 没有固定炮台：整只 Boss 就是可打的身体
+    core: {
+      x: sx, y: air ? floor - 214 : floor - h, w, h,
+      hp: cfg.hp, maxHp: cfg.hp, dead:false, shielded:false, mobile:true,
+      vx:0, vy:0, face:-1, onGround:!air, crouchT:0, duckCd: 150, flash:0,
+      jumpCd: 60, shootCd: 96, warnT:0, burst:0, bt:0, aimA: Math.PI,
+      dashT:0, dashDir:-1, dashCd: 160, windDash:0, diveT:0, diveCd: 190, walkT:0,
+    },
+  };
+  return boss;
+}
+function hunterMuzzle(c){
+  const ang = c.aimA;
+  return {x: c.x + c.w/2 + Math.cos(ang)*26, y: c.y + c.h*0.38 + Math.sin(ang)*26};
+}
+function fireHunterShot(b, c){
+  const m = hunterMuzzle(c);
+  const v = b.rage ? 6.6 : 5.8;
+  ebullets.push({x:m.x, y:m.y, w:9, h:9, r:5,
+                 vx:Math.cos(c.aimA)*v, vy:Math.sin(c.aimA)*v, life:210, alien:true});
+  explode(m.x, m.y, "#fff6c8", 3, 2);
+  S.shoot();
+}
+function updateHunterBoss(b, p){
+  const c = b.core;
+  if(c.flash > 0) c.flash--;
+  if(c.dead) return;
+  const px = p.x + p.w/2, py = p.y + p.h/2;
+  const cx = c.x + c.w/2;
+  const dx = px - cx, dist = Math.abs(dx);
+  const face = dx > 0 ? 1 : -1;
+
+  if(!b.rage && c.hp <= c.maxHp*0.5){
+    b.rage = true; c.flash = 24; shake = Math.max(shake, 12);
+    sfx(70,.7,"sawtooth",.14,-40);
+    explode(cx, c.y + c.h*0.4, "#ff2f14", 22, 6);
+  }
+  const rage = b.rage;
+  if(c.dashT <= 0 && c.windDash <= 0 && c.diveT <= 0) c.face = face;
+  c.walkT++;
+
+  // 蹲下时压低身位（脚底不动），此时平射会从它头顶飞过去
+  const baseH = b.air ? 62 : 70;
+  const wantH = (!b.air && c.crouchT > 0) ? 44 : baseH;
+  if(c.h !== wantH){ const feet = c.y + c.h; c.h = wantH; c.y = feet - wantH; }
+
+  if(!b.air){
+    // ---------------- 地面型：重力 + 走位 + 跳跃 + 冲刺 ----------------
+    const gy = groundYAt(c.x + c.w/2);
+    const floor = gy < Infinity ? gy : GROUND_Y;
+    c.vy = Math.min(c.vy + 0.62, 15); c.y += c.vy;
+    if(c.y + c.h >= floor){ c.y = floor - c.h; c.vy = 0; c.onGround = true; }
+    else c.onGround = false;
+
+    if(c.windDash > 0){
+      // 冲刺前摇：脚下红色箭头（玩家能看出来要走位）
+      c.windDash--;
+      if(c.windDash === 0){ c.dashT = 26; c.dashDir = c.face; sfx(140,.4,"square",.13,-40); }
+    } else if(c.dashT > 0){
+      c.dashT--;
+      c.x += c.dashDir * (rage ? 8.0 : 7.0);
+      shake = Math.max(shake, 4);
+      if(c.dashT === 0){
+        c.dashCd = 210;
+        explode(c.x+c.w/2, c.y+c.h-6, "#9aa0a8", 16, 4.2);
+      }
+    } else if(c.crouchT <= 0 && c.warnT <= 0 && c.burst <= 0){
+      // 走位：远了追、近了退、中距离慢慢压上来
+      const spd = (rage ? 2.4 : 1.8) * (dist > 900 ? 2.3 : dist > 520 ? 1.7 : 1);
+      if(dist > 340) c.x += face * spd;
+      else if(dist < 200) c.x -= face * spd * 0.8;
+      else c.x += face * spd * 0.25;
+      // 起跳：玩家在高处 / 突进 / 主动躲子弹
+      if(c.onGround && c.jumpCd <= 0 &&
+         (p.y + p.h < c.y - 24 || (dist > 380 && Math.random() < 0.02) || Math.random() < 0.008)){
+        c.vy = -11.6; c.jumpCd = rage ? 52 : 78;
+        if(dist > 260) c.x += face * 28;
+        sfx(180,.2,"square",.06,-70);
+      }
+      // 蹲下躲子弹（每 150~270 帧一次，蹲 46 帧）
+      if(c.duckCd <= 0 && c.onGround){
+        c.crouchT = 46; c.duckCd = 150 + Math.random()*120;
+      }
+    }
+    if(c.jumpCd > 0) c.jumpCd--;
+    if(c.duckCd > 0) c.duckCd--;
+    if(c.crouchT > 0) c.crouchT--;
+    if(c.dashCd > 0) c.dashCd--;
+    // 冲刺：第三只 Boss（冰盖）与狂暴期才有
+    if(!b.dashOk){ b.dashOk = HUNTER_CFG[b.level].dash; }
+    if(b.dashOk && rage && c.dashCd <= 0 && c.dashT <= 0 && c.windDash <= 0 &&
+       c.crouchT <= 0 && c.warnT <= 0 && c.burst <= 0 && dist > 130 && dist < 620){
+      c.windDash = 34;
+      sfx(95,.4,"sawtooth",.1,-40);
+    }
+    c.x = Math.max(0, Math.min(c.x, LEVEL_W - c.w));
+  } else {
+    // ---------------- 飞行型：悬停缠斗 + 俯冲 ----------------
+    const gy2 = groundYAt(c.x + c.w/2);
+    const floor = gy2 < Infinity ? gy2 : GROUND_Y;
+    if(c.windDash > 0){
+      c.windDash--;
+      if(c.windDash === 0){ c.diveT = 24; c.diveDir = c.face; shake = Math.max(shake, 8); sfx(140,.4,"square",.13,-40); }
+    } else if(c.diveT > 0){
+      c.diveT--;
+      c.y += ((floor - c.h - 4) - c.y) * 0.26;
+      c.x += c.diveDir * (rage ? 9.4 : 8.0);
+      if(c.diveT === 0) c.diveCd = 230;
+    } else {
+      const hoverY = floor - (rage ? 148 : 188) + Math.sin(b.t*0.035)*22;
+      c.y += (hoverY - c.y) * 0.05;
+      const spd = rage ? 2.3 : 1.7;
+      if(dist > 330) c.x += face * spd;
+      else if(dist < 175) c.x -= face * spd;
+      else c.x += Math.sin(b.t*0.02) * 0.9;
+    }
+    if(c.diveCd > 0) c.diveCd--;
+    if(c.diveCd <= 0 && c.diveT <= 0 && c.windDash <= 0 && dist > 120 && dist < 620 && Math.random() < 0.02){
+      c.windDash = 30; sfx(95,.4,"sawtooth",.1,-40);
+    }
+    c.x = Math.max(20, Math.min(c.x, LEVEL_W - c.w - 20));
+    c.y = Math.max(56, Math.min(c.y, floor - c.h - 8));
+  }
+
+  // ---------------- 射击：前摇 28 帧 → 3~4 连点射 → 冷却 ----------------
+  if(c.shootCd > 0) c.shootCd--;
+  if(c.warnT > 0){
+    c.warnT--;
+    if(c.warnT === 0){
+      c.burst = rage ? 4 : 3; c.bt = 0;
+      sfx(1400,.18,"sawtooth",.08,-500);
+    }
+  } else if(c.burst > 0){
+    c.bt++;
+    if(c.bt % 11 === 1){
+      fireHunterShot(b, c);
+      c.burst--;
+      if(c.burst === 0) c.shootCd = rage ? 64 : (HUNTER_CFG[b.level].cd || 100);
+    }
+  } else if(c.shootCd <= 0 && c.crouchT <= 0 && c.dashT <= 0 && c.windDash <= 0 && c.diveT <= 0 &&
+            !p.dead && dist < 760){
+    c.warnT = 28;
+    c.aimA = Math.atan2(py - (c.y + c.h*0.38), px - (c.x + c.w/2));
+    sfx(880,.16,"sine",.05,-300);
+  }
+
+  // 身体碰撞
+  if(!p.dead && p.inv <= 0 && aabb(hitbox(), c)) hurtPlayer();
+}
+
+// ============ 第八关 Boss：母舰核心（节点荚 + 主题杀招） ============
 function spawnCarrierSpecial(b, p){
   const px = p.x + p.w/2;
   const clampX = (x, pad=60) => Math.max(b.wallX - 1020, Math.min(b.wallX - pad, x));
@@ -1116,28 +1307,28 @@ function updateCarrierBoss(b, p){
   const phase = core.hp <= core.maxHp * 0.55 ? 2 : 1;
   b.phase = phase;
 
-  // ---- 节点荚：预警 26 帧 → 三连追踪弹 ----
+  // ---- 节点荚：预警 30 帧 → 两连点射（节奏放慢，留出走位窗口）----
   for(const c of b.cannons){
     if(c.dead) continue;
     c.t++;
     const cx = c.x + c.w/2, cy = c.y + c.h/2;
-    const period = Math.max(96, (phase === 2 ? 116 : 152) - b.level*3);
+    const period = Math.max(168, (phase === 2 ? 210 : 260) - b.level*4);
     if(c.warnT <= 0 && c.burst <= 0 && c.t % period === 0 && !p.dead &&
-       Math.abs((p.x + p.w/2) - cx) < 980){
-      c.warnT = 26;
+       Math.abs((p.x + p.w/2) - cx) < 900){
+      c.warnT = 30;
       c.gunA = Math.atan2(chestY() - cy, (p.x + p.w/2) - cx);
       sfx(780,.14,"sine",.045,-260);
     }
     if(c.warnT > 0){
       c.warnT--;
-      if(c.warnT === 0){ c.burst = 3; c.bt = 0; c.flash = 6; }
+      if(c.warnT === 0){ c.burst = 2; c.bt = 0; c.flash = 6; }
     }
     if(c.burst > 0){
       c.bt++;
-      if(c.bt % 8 === 1){
-        const ang = c.gunA + (Math.random()-0.5)*0.07;
+      if(c.bt % 14 === 1){
+        const ang = c.gunA + (Math.random()-0.5)*0.06;
         ebullets.push({x:cx, y:cy, w:9, h:9, r:5,
-                       vx:Math.cos(ang)*5.0, vy:Math.sin(ang)*5.0, life:210, alien:true});
+                       vx:Math.cos(ang)*4.4, vy:Math.sin(ang)*4.4, life:210, alien:true});
         c.burst--;
       }
     }
@@ -1146,13 +1337,13 @@ function updateCarrierBoss(b, p){
 
   // ---- 核心环形弹幕 ----
   if(!core.dead){
-    const n = core.shielded ? 10 : (phase === 2 ? 16 : 12);
-    const period = phase === 2 ? 176 : (core.shielded ? 250 : 214);
+    const n = core.shielded ? 7 : (phase === 2 ? 11 : 9);
+    const period = phase === 2 ? 300 : (core.shielded ? 380 : 330);
     if(b.t % period === 36){
       for(let k=0;k<n;k++){
         const ang = b.t*0.035 + k*Math.PI*2/n;
         ebullets.push({x:core.x+core.w/2, y:core.y+core.h/2, w:9, h:9, r:5,
-                       vx:Math.cos(ang)*3.9, vy:Math.sin(ang)*3.9, life:250, alien:true});
+                       vx:Math.cos(ang)*3.3, vy:Math.sin(ang)*3.3, life:250, alien:true});
       }
       S.shoot();
     }
@@ -1161,17 +1352,17 @@ function updateCarrierBoss(b, p){
 
   // ---- 主题杀招 ----
   b.spT++;
-  const spPeriod = phase === 2 ? 200 : 286;
-  if(!core.dead && b.spT % spPeriod === 96 && b.specials.length < 3){
+  const spPeriod = phase === 2 ? 320 : 440;
+  if(!core.dead && b.spT % spPeriod === 96 && b.specials.length < 2){
     spawnCarrierSpecial(b, p);
   }
   updateCarrierSpecials(b, p);
 
   // ---- 召唤守军 ----
   b.spawnT++;
-  if(!core.dead && b.spawnT > (phase === 2 ? 250 : 370)){
+  if(!core.dead && b.spawnT > (phase === 2 ? 420 : 560)){
     b.spawnT = 0;
-    const cnt = phase === 2 ? 3 : 2;
+    const cnt = phase === 2 ? 2 : 1;
     for(let k=0;k<cnt;k++){
       const sx = b.wallX - 260 - k*140;
       const gy = groundYAt(sx);
@@ -1855,10 +2046,9 @@ function update(){
       // 下坡不续时间：滑势一旦衰减到 1.3 就收铲，绝不一滑到底
       if(lipAhead || !p.onGround || p.slideV < 1.3 || p.slideAge > 48){ p.slideT = 0; if(lipAhead) p.vx = 0; }
       else { p.vx = dir * p.slideV; p.face = dir; p.slideT--; }
-      if(p.slideT === 0) p.slideCd = 20;       // 铲完稍作停顿，不能连按刷距离
-    } else if(p.onGround && p.slideCd <= 0 && ((kLeft() && !p.prevL) || (kRight() && !p.prevR))
+    } else if(p.onGround && ((kLeft() || kRight()))
               && groundYAt(p.x + p.w/2 + (kLeft()?-9:9)) < Infinity){
-      // 起铲（需重新按方向键触发，按住不放不会连铲；紧贴崖边时不起铲，避免直接滑进坑里）
+      // 起铲：按住 ↓ + 方向键就能一直铲下去（松开方向键才停），不再需要反复点按
       p.slideDir = kLeft() ? -1 : 1;
       p.slideV = 8.4; p.slideT = 34; p.slideAge = 0; p.face = p.slideDir;
       p.vx = p.slideDir * p.slideV;
@@ -2043,7 +2233,15 @@ function update(){
   // 第三关是往左跑：镜头多留出前方的空间（主角偏屏幕右侧）
   const camLead = finalRun ? 0.55 : 0.38;
   const targetCam = Math.max(0, Math.min(p.x - W*camLead, LEVEL_W - W));
-  cam = boss.active ? Math.min(cam+6, LEVEL_W - W) : cam + (targetCam - cam)*0.12;
+  const roamBoss = boss && boss.active && (boss.kind === "hunter" || boss.kind === "hunterAir");
+  if(roamBoss){
+    // 追踪型 Boss：镜头取"主角与 Boss 的中点"，边打边跑也不会看不见对手
+    const mid = (p.x + (boss.core.x + boss.core.w/2)) / 2;
+    const tc = Math.max(0, Math.min(mid - W*0.5, LEVEL_W - W));
+    cam = cam + (tc - cam)*0.10;
+  } else {
+    cam = boss.active ? Math.min(cam+6, LEVEL_W - W) : cam + (targetCam - cam)*0.12;
+  }
 
   // ----- 触发生成（通关演出阶段 / Boss 已破不再刷兵）-----
   if(state==="play" && !(boss && boss.dead)){
@@ -2405,13 +2603,13 @@ function update(){
   // 小 Boss 是锁场战斗的主角，不能因为镜头还没跟上就被当成"出界"清掉
   enemies = enemies.filter(e => !e.dead && (e.kind === "mini" || (e.x > cam - 200 && e.x < cam + W + 400 && e.y < H + 80)));
 
-  // ----- 第四~八关：母舰中段的小 Boss（锁场、死亡结算）-----
+  // ----- 第五~八关：母舰中段的小 Boss（全图追击、死亡结算）-----
+  // 不再锁场：小 Boss 会一路跟着主角跑，主角想去哪就去哪；只有把它打死才算完。
   if(miniArena && state === "play"){
-    if(!miniSpawned && p.x > miniArena.l + 60 && p.x < miniArena.r) spawnMini();
+    if(!miniSpawned && p.x > miniArena.l + 60) spawnMini();
     if(mini){
       if(!mini.dead){
-        // 闸门落下：这一小段必须打赢才能继续往前走
-        p.x = Math.max(miniArena.l, Math.min(p.x, miniArena.r - p.w));
+        // 什么都不做（以前这里会把主角夹在左半屏，导致卡在墙角 / 坑里）
       } else if(!mini.rewarded){
         mini.rewarded = true;
         lives++; score += 2000;
@@ -2428,12 +2626,15 @@ function update(){
   // ----- Boss -----
   const b = boss;
   if(!b.dead){
-    if(!b.active && p.x > LEVEL_W - 1000){ b.active = true; }
+    if(!b.active && p.x > ((b.kind === "hunter" || b.kind === "hunterAir") ? b.core.x - 840 : LEVEL_W - 1000)){ b.active = true; }
     if(b.active){
       b.t++;
-      cam = Math.min(cam+6, LEVEL_W - W);
+      // 移动型 Boss 不锁镜头（它自己会跑过来），舱壁型 Boss 依旧把镜头推到右墙
+      if(b.kind !== "hunter" && b.kind !== "hunterAir") cam = Math.min(cam+6, LEVEL_W - W);
       if(b.kind === "alien"){
         updateAlienBoss(b, p);
+      } else if(b.kind === "hunter" || b.kind === "hunterAir"){
+        updateHunterBoss(b, p);
       } else if(b.kind === "carrier"){
         updateCarrierBoss(b, p);
       } else if(b.kind === "reactor"){
@@ -2571,7 +2772,7 @@ function update(){
           const core = boss.core;
           if(!core.dead && Math.hypot((core.x+core.w/2)-(bl.x+7), (core.y+core.h/2)-(bl.y+7))<95){
             if(core.shielded){ explode(core.x+core.w/2, core.y+core.h/2, "#5afff0", 12, 4); }
-            else { core.hp-=3; if(core.hp<=0) killCore(); }
+            else { core.hp-=3*(core.mobile?2:1); if(core.hp<=0) killCore(); }
           }
         }
       }
@@ -2636,7 +2837,7 @@ function update(){
         if(!core.dead && !bl.hit.has(core) && hitTest(core)){
           bl.hit.add(core);
           if(core.shielded){ explode(core.x+core.w/2, core.y+core.h/2, "#5afff0", 10, 3); }
-          else { core.hp-=3; if(core.hp<=0) killCore(); }
+          else { core.hp-=3*(core.mobile?2:1); if(core.hp<=0) killCore(); }
         }
       }
       continue;
@@ -2717,7 +2918,7 @@ function update(){
         bl.life=0;
         if(core.shielded){ explode(bl.x,bl.y,"#5afff0",6,3); }
         else {
-          core.hp-=bl.dmg||1; explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
+          core.hp-=(bl.dmg||1)*(core.mobile?2:1); explode(bl.x,bl.y,"#fff3a0",6,3); S.hitE();
           if(core.hp<=0) killCore();
         }
       }
@@ -3028,6 +3229,7 @@ function killCore(){
   // Boss 倒下即清场：全屏小兵不再刷新，也不再干扰通关演出
   enemies = [];
   ironBalls = [];
+  if(mini) mini.dead = true;          // 中段小 Boss 也一起收场，避免通关时它还在追人
   if(boss.sniper) boss.sniper.st = "down";
   ebullets = ebullets.filter(b => Math.abs(b.x - (core.x+core.w/2)) > 320);
   if(LEVEL_IDX === 2 && !finalRun){
@@ -4409,7 +4611,7 @@ function spawnMini(){
           hp:A.hp, maxHp:A.hp, name:A.name, tone:A.tone || "alien",
           face:-1, t:0, st:"idle", stT:0, cd:100, flash:0,
           dead:false, animT:0, vx:0, vy:0, warnT:0, chargeDir:-1, rewarded:false, grounded:true,
-          rage:false};
+          jumpCd: 0, rage:false};
   enemies.push(mini);
   shake = Math.max(shake, 14);
   sfx(60,.7,"sawtooth",.14,-50);
@@ -4417,7 +4619,6 @@ function spawnMini(){
 function updateMini(e, p){
   e.t++; if(e.flash > 0) e.flash--;
   e.animT += 0.12;
-  const A = miniArena || {l:MINI_ARENA_L, r:MINI_ARENA_R};
   const cx = e.x + e.w/2, px = p.x + p.w/2;
   const dx = px - cx, dist = Math.abs(dx);
   if(e.st !== "charge") e.face = dx > 0 ? 1 : -1;
@@ -4433,17 +4634,39 @@ function updateMini(e, p){
   if(gy < Infinity && e.y + e.h >= gy){ e.y = gy - e.h; e.vy = 0; e.grounded = true; }
   else e.grounded = false;
   if(e.dead) return;
+  // 掉出世界（掉进坑里）→ 直接从主角身后爬出来，绝不人间蒸发
+  if(e.y > H + 40){
+    const bx = Math.max(0, Math.min(LEVEL_W - e.w, px + (e.x < px ? 260 : -260)));
+    const bg = groundYAt(bx + e.w/2);
+    e.x = bx; e.y = (bg < Infinity ? bg : GROUND_Y) - e.h; e.vy = 0;
+    explode(e.x + e.w/2, e.y + e.h/2, "#7dfce8", 14, 4);
+  }
+  if(e.x < 0) e.x = 0;
+  if(e.x + e.w > LEVEL_W) e.x = LEVEL_W - e.w;
 
   e.stT++;
+  // 离得太远就收起一切花招，只管追人（否则会被"吐酸/召唤"卡在原地追不上）
+  if(dist > 620 && e.st !== "idle"){ e.st = "idle"; e.stT = 0; }
   if(e.st === "idle"){
-    const spd = e.rage ? 1.55 : 1.15;
-    if(dist > 300) e.x += e.face * spd;
-    else if(dist < 165) e.x -= e.face * (spd*0.85);
-    if(e.stT > (e.rage ? 32 : 48)){
+    // 全图追击：离得越远跑得越快，玩家跑不掉也甩不开
+    let spd = e.rage ? 2.5 : 1.9;
+    if(dist > 900)      spd = e.rage ? 5.6 : 4.8;
+    else if(dist > 460) spd = e.rage ? 4.2 : 3.5;
+    else if(dist > 230) spd = e.rage ? 2.9 : 2.2;
+    if(dist > 210) e.x += e.face * spd;
+    else if(dist < 110) e.x -= e.face * spd * 0.8;   // 贴太近会退开一点，避免一头撞死玩家
+    // 跨坑 / 追远：起跳抄近路
+    if(e.jumpCd > 0) e.jumpCd--;
+    if(e.grounded && e.jumpCd <= 0 &&
+       (groundYAt(cx + e.face*74) === Infinity || (dist > 340 && Math.random() < 0.05))){
+      e.vy = -10.2; e.jumpCd = 62;
+      sfx(170,.2,"square",.06,-80);
+    }
+    if(e.stT > (e.rage ? 32 : 46) && dist <= 470){
       e.stT = 0;
       const r = Math.random();
-      if(r < 0.46){ e.st = "wind"; e.warnT = e.rage ? 34 : 46; sfx(90,.5,"sawtooth",.10,-50); }
-      else if(r < 0.78){ e.st = "spit"; }
+      if(r < 0.44){ e.st = "wind"; e.warnT = e.rage ? 34 : 46; sfx(90,.5,"sawtooth",.10,-50); }
+      else if(r < 0.76){ e.st = "spit"; }
       else { e.st = "summon"; }
     }
   } else if(e.st === "wind"){
@@ -4455,8 +4678,9 @@ function updateMini(e, p){
   } else if(e.st === "charge"){
     e.x += e.chargeDir * (e.rage ? 6.0 : 4.6);
     shake = Math.max(shake, e.rage ? 6 : 4);
-    if(e.x < A.l - 30 || e.x + e.w > A.r + 30 || e.stT > 80){
-      e.st = "stun"; e.stT = 0; shake = Math.max(shake, 12);
+    // 撞到关卡边界 / 冲太久才收招（以前撞到"场景围栏"就硬直，现在只有撞墙才硬直）
+    if(e.x < 4 || e.x + e.w > LEVEL_W - 4 || e.stT > 80){
+      e.st = "stun"; e.stT = 0; shake = Math.max(shake, 11);
       sfx(80,.5,"square",.14,-30);
       explode(e.x + e.w/2, e.y + e.h - 8, "#9aa0a8", 20, 4.5);
     }
@@ -4464,18 +4688,18 @@ function updateMini(e, p){
     if(e.stT > 66){ e.st = "idle"; e.stT = 0; }
   } else if(e.st === "spit"){
     if(e.stT === 24){
-      const n = e.rage ? 7 : 5;
+      const n = e.rage ? 5 : 3;
       for(let k=0;k<n;k++){
-        const ang = -Math.PI/2 + (k-(n-1)/2)*0.26;
+        const ang = -Math.PI/2 + (k-(n-1)/2)*0.34;
         ebullets.push({x:cx, y:e.y + 20, w:11, h:11, r:6,
-                       vx:Math.cos(ang)*5.2, vy:Math.sin(ang)*5.2, g:0.26, life:220, acid:true});
+                       vx:Math.cos(ang)*4.4, vy:Math.sin(ang)*4.4, g:0.26, life:220, acid:true});
       }
       sfx(170,.3,"sawtooth",.1,-70);
     }
-    if(e.stT > 62){ e.st = "idle"; e.stT = 0; }
+    if(e.stT > 66){ e.st = "idle"; e.stT = 0; }
   } else if(e.st === "summon"){
     if(e.stT === 28){
-      const n = e.rage ? 3 : 2;
+      const n = e.rage ? 2 : 1;
       for(let k=0;k<n;k++){
         const sx = cx + (k - (n-1)/2)*96;
         const g2 = groundYAt(sx);
@@ -6025,11 +6249,169 @@ function drawCarrierBoss(){
     }
   }
 }
+// ============ 第五~七关 Boss 绘制：会走动的机械守卫 / 悬浮之眼 ============
+function drawHunterBoss(){
+  const b = boss, c = b.core;
+  const sx = c.x - cam;
+  if(sx > W + 260 || sx + c.w < -260) return;
+  const P = THEMES[b.tint] || THEMES.alien;
+  const w = c.w, h = c.h, x = sx, y = c.y;
+  const cx = x + w/2, cy = y + h*0.42;
+  const rage = b.rage, flash = c.flash > 0;
+  const aiming = c.warnT > 0 || c.burst > 0;
+  const moving = !(aiming || c.crouchT > 0 || c.windDash > 0);
+  const gy = groundYAt(c.x + c.w/2);
+  const floor = (gy < Infinity ? gy : GROUND_Y);
+  const bob = Math.sin(c.walkT*0.16)*2;
+
+  // ---- 地面影子 ----
+  ctx.fillStyle = "rgba(0,0,0,.42)";
+  ctx.beginPath();
+  ctx.ellipse(cx, floor + 2, w*0.52, b.air ? 5 : 7, 0, 0, 6.283);
+  ctx.fill();
+
+  // ---- 冲刺 / 俯冲预警：地面红色箭头 ----
+  if(c.windDash > 0){
+    const a = 0.3 + 0.55*Math.abs(Math.sin(c.windDash*0.5));
+    ctx.globalAlpha = a; ctx.fillStyle = "#ff2f14";
+    const dir = c.face;
+    for(let i=0;i<3;i++){
+      const ax = cx + dir*(46 + i*32);
+      ctx.beginPath();
+      ctx.moveTo(ax, floor - 26); ctx.lineTo(ax + dir*16, floor - 14);
+      ctx.lineTo(ax, floor - 2); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.save();
+  if(b.air){
+    // ================= 飞行型：悬浮之眼 =================
+    const pulse = 0.5 + 0.5*Math.sin(perfNow*0.005);
+    // 外壳环
+    ctx.strokeStyle = P.top; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(cx, cy, w*0.62, h*0.26, Math.sin(b.t*0.02)*0.5, 0, 6.283); ctx.stroke();
+    ctx.strokeStyle = P.accent; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(cx, cy, w*0.46, h*0.20, -Math.sin(b.t*0.03)*0.6, 0, 6.283); ctx.stroke();
+    // 眼球
+    const g = ctx.createRadialGradient(cx-6, cy-8, 3, cx, cy, w*0.44);
+    g.addColorStop(0, flash ? "#fff" : (rage ? "#ff5b6a" : P.rivet));
+    g.addColorStop(.55, flash ? "#ffd0d6" : P.platTop);
+    g.addColorStop(1, P.platBot);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, w*0.42, 0, 6.283); ctx.fill();
+    // 瞳孔（看向主角）
+    const look = c.face;
+    ctx.fillStyle = rage ? "#ff2f14" : "#0a1620";
+    ctx.beginPath(); ctx.ellipse(cx + look*9, cy + 2, 9, 13, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = rage ? "#ffd0d0" : P.accent;
+    ctx.beginPath(); ctx.arc(cx + look*9 - 2, cy - 2, 3.4, 0, 6.283); ctx.fill();
+    // 下方垂须
+    ctx.strokeStyle = P.platBody; ctx.lineWidth = 4; ctx.lineCap = "round";
+    for(let i=-2;i<=2;i++){
+      ctx.beginPath();
+      ctx.moveTo(cx + i*9, cy + h*0.36);
+      ctx.quadraticCurveTo(cx + i*13 + Math.sin(b.t*0.08+i)*5, cy + h*0.58,
+                           cx + i*16 + Math.sin(b.t*0.06+i)*8, cy + h*0.78);
+      ctx.stroke();
+    }
+  } else {
+    // ================= 地面型：机械守卫 =================
+    const legH = h*0.36, torsoH = h*0.40;
+    const torsoY = y + h*0.24 + (c.crouchT > 0 ? 6 : 0);
+    // 双腿（走动摆动）
+    const sw = (c.crouchT > 0) ? 0 : (moving ? Math.sin(c.walkT*0.3)*7 : 0);
+    ctx.fillStyle = P.platBot;
+    ctx.fillRect(cx - 15, y + h - legH, 11, legH - 2);
+    ctx.fillRect(cx + 4,  y + h - legH, 11, legH - 2);
+    ctx.fillStyle = P.platBody;
+    ctx.fillRect(cx - 15 + sw*0.5, y + h - 8, 13, 7);
+    ctx.fillRect(cx + 4 - sw*0.5,  y + h - 8, 13, 7);
+    // 躯干
+    ctx.fillStyle = flash ? "#fff" : P.platBody;
+    ctx.beginPath();
+    ctx.moveTo(cx - 17, torsoY);
+    ctx.lineTo(cx + 17, torsoY);
+    ctx.lineTo(cx + 13, torsoY + torsoH);
+    ctx.lineTo(cx - 13, torsoY + torsoH);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = P.top; ctx.lineWidth = 2; ctx.stroke();
+    // 胸核
+    const coreCol = aiming ? "#ff5b3d" : (rage ? "#ff2f14" : P.accent);
+    ctx.fillStyle = coreCol;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.arc(cx, torsoY + torsoH*0.45, 5 + Math.sin(c.walkT*0.2)*1.2, 0, 6.283); ctx.fill();
+    ctx.globalAlpha = 1;
+    // 肩甲
+    ctx.fillStyle = P.spike;
+    ctx.beginPath(); ctx.moveTo(cx - 20, torsoY + 4); ctx.lineTo(cx - 12, torsoY - 6); ctx.lineTo(cx - 4, torsoY + 4); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(cx + 4, torsoY + 4); ctx.lineTo(cx + 12, torsoY - 6); ctx.lineTo(cx + 20, torsoY + 4); ctx.closePath(); ctx.fill();
+    // 头
+    const headY = torsoY - 15;
+    ctx.fillStyle = flash ? "#fff" : P.head || P.platTop;
+    ctx.beginPath();
+    ctx.moveTo(cx - 11, headY); ctx.lineTo(cx + 11, headY);
+    ctx.lineTo(cx + 8, headY + 14); ctx.lineTo(cx - 8, headY + 14);
+    ctx.closePath(); ctx.fill();
+    // 眼（瞄准时红亮）
+    ctx.fillStyle = aiming ? "#ff3b1f" : (rage ? "#ff7a3d" : P.accent);
+    ctx.fillRect(cx - 7 + c.face*2, headY + 5, 14, 4);
+    // 持枪臂 + 枪
+    const ang = aiming ? c.aimA : (c.face > 0 ? 0.12 : Math.PI - 0.12);
+    const sy0 = torsoY + torsoH*0.42;
+    ctx.save();
+    ctx.translate(cx + c.face*4, sy0);
+    ctx.rotate(ang);
+    ctx.fillStyle = P.arm || P.platBot;
+    ctx.fillRect(0, -6, 30, 12);                 // 枪身
+    ctx.fillStyle = P.rivet || "#d8e6f2";
+    ctx.fillRect(0, -6, 30, 3);
+    ctx.fillStyle = "#0a0f14";
+    ctx.fillRect(28, -4, 6, 8);                  // 枪口
+    ctx.fillStyle = P.platBody;
+    ctx.fillRect(4, 4, 10, 10);                  // 弹匣
+    if(c.warnT > 0 && Math.floor(b.t/4)%2 === 0){
+      ctx.fillStyle = "#ffe58a";
+      ctx.beginPath(); ctx.moveTo(34,-5); ctx.lineTo(46,-1); ctx.lineTo(34,3); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // ---- 瞄准预警线（虚线，指到锁定那一刻的位置，之后不再跟随）----
+  if(c.warnT > 0 && !c.dead){
+    const m = {x: cx + Math.cos(c.aimA)*26, y: cy + Math.sin(c.aimA)*26};
+    ctx.save();
+    ctx.globalAlpha = 0.35 + 0.35*Math.abs(Math.sin(b.t*0.5));
+    ctx.strokeStyle = rage ? "#ff5b3d" : "#ffd34d";
+    ctx.lineWidth = 2; ctx.setLineDash([9, 7]);
+    ctx.beginPath(); ctx.moveTo(m.x, m.y);
+    ctx.lineTo(m.x + Math.cos(c.aimA)*860, m.y + Math.sin(c.aimA)*860);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ---- 血条 ----
+  if(!b.dead){
+    const bw = 440, bx = W/2 - bw/2, by = 86;
+    ctx.fillStyle = "#000a"; ctx.fillRect(bx-4, by-24, bw+8, 32);
+    ctx.fillStyle = "#20172c"; ctx.fillRect(bx, by, bw, 14);
+    const k = Math.max(0, c.hp / c.maxHp);
+    const hg = ctx.createLinearGradient(bx, 0, bx+bw, 0);
+    hg.addColorStop(0, P.accent); hg.addColorStop(1, rage ? "#ff2f14" : "#ffb347");
+    ctx.fillStyle = hg; ctx.fillRect(bx, by, bw*k, 14);
+    ctx.fillStyle = "#e8f4ff"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
+    ctx.fillText(b.name + (rage ? " · 狂暴" : ""), W/2, by - 8);
+    ctx.textAlign = "left";
+  }
+}
 function drawBoss(){
   if(!boss) return;
-  if(boss.kind === "reactor") return drawReactor();
-  if(boss.kind === "alien")   return drawAlienBoss();
+  if(boss.kind === "reactor") return drawReactor();  if(boss.kind === "alien")   return drawAlienBoss();
   if(boss.kind === "carrier") return drawCarrierBoss();
+  if(boss.kind === "hunter" || boss.kind === "hunterAir") return drawHunterBoss();
   const b = boss, wx = b.wallX - cam;
   if(wx > W + 100) return;
   const wallW = LEVEL_W - b.wallX + 300;
